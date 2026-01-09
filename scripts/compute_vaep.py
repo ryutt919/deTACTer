@@ -15,9 +15,18 @@ with open('c:/Users/Public/Documents/DIK/deTACTer/config.yaml', 'r') as f:
     config = yaml.safe_load(f)
 
 SPADL_DIR = config['data']['spadl_output_dir']
-NB_PREV_ACTIONS = config['features']['nb_prev_actions']
 RESULTS_DIR = "results"
 PARAMS_PATH = os.path.join(RESULTS_DIR, "best_params.yaml")
+
+# Load NB_PREV_ACTIONS from best_params if available, else from config
+if os.path.exists(PARAMS_PATH):
+    with open(PARAMS_PATH, 'r') as f:
+        _best = yaml.safe_load(f)
+        NB_PREV_ACTIONS = _best.get('nb_prev_actions', config['features']['nb_prev_actions'])
+else:
+    NB_PREV_ACTIONS = config['features']['nb_prev_actions']
+
+print(f"Using NB_PREV_ACTIONS = {NB_PREV_ACTIONS}")
 
 def load_spadl_data():
     all_games = []
@@ -99,6 +108,7 @@ def train_and_predict(X, Y):
         }
     
     # Add common params
+    params.pop('nb_prev_actions', None) # Remove it if present, not a model hyperparam
     params['verbose'] = 0
     params['random_state'] = 42
     

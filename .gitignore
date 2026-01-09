@@ -1,7 +1,7 @@
 # Data files
 data/
 raw_data.csv
-results/
+# results/
 catboost_info/
 
 # Python
