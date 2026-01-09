@@ -1,0 +1,38 @@
+data:
+  raw_data_path: "data/raw_data.csv"
+  match_info_path: "data/match_info.csv"
+  spadl_output_dir: "data/spadl"
+
+features:
+  nb_prev_actions: 3
+
+model:
+  type: "CatBoostClassifier"
+  n_estimators: 100               # Initial default
+  learning_rate: 0.1              # Initial default
+  max_depth: 5                    # Initial default
+  cat_features: []                # To be filled if categorical types are used directly
+
+optimization:
+  n_trials: 2
+  study_name: "vaep_catboost_opt"
+  direction: "maximize"
+  metric: "roc_auc"               # or average_precision
+  params:
+    n_estimators:
+      type: "int"
+      low: 100
+      high: 1000
+    learning_rate:
+      type: "float"
+      low: 0.01
+      high: 0.3
+      log: true
+    max_depth:
+      type: "int"
+      low: 3
+      high: 10
+    nb_prev_actions:
+      type: "int"
+      low: 1
+      high: 5

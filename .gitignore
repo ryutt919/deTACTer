@@ -1,0 +1,12 @@
+# Data files
+data/
+raw_data.csv
+results/
+catboost_info/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Notebook
+.ipynb_checkpoints
