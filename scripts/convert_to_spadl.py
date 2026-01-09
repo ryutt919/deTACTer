@@ -10,7 +10,14 @@ with open('c:/Users/Public/Documents/DIK/deTACTer/config.yaml', 'r') as f:
     config = yaml.safe_load(f)
 
 RAW_DATA_PATH = config['data']['raw_data_path']
+CLEAN_DATA_PATH = 'data/cleaned_raw_data.csv' # 전처리된 파일 경로
 OUTPUT_DIR = config['data']['spadl_output_dir']
+
+if not os.path.exists(CLEAN_DATA_PATH):
+    print(f"Warning: Cleaned data not found at {CLEAN_DATA_PATH}. Using raw data.")
+    DATA_TO_LOAD = RAW_DATA_PATH
+else:
+    DATA_TO_LOAD = CLEAN_DATA_PATH
 
 if not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)
@@ -81,6 +88,7 @@ def convert_to_spadl(df):
     spadl_df['start_y'] = df['start_y']
     spadl_df['end_x'] = df['end_x']
     spadl_df['end_y'] = df['end_y']
+    spadl_df['sequence_id'] = df['sequence_id'] # 추가
     spadl_df['original_event_type'] = df['type_name']
     
     # Map type_name to standardized SPADL names

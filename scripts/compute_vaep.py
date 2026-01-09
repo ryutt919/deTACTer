@@ -74,9 +74,7 @@ def generate_features_and_labels(games):
             Y_list.append(Y_game)
             
             # Keep track of indices to map back to original data
-            # We preserve game_id, period_id, time_seconds, action_id (if exists) 
-            # or just use the index of the action in the game df
-            meta = game[['game_id', 'period_id', 'time_seconds', 'team_id', 'player_id', 'type_name', 'result_name']].copy()
+            meta = game[['game_id', 'period_id', 'time_seconds', 'team_id', 'player_id', 'type_name', 'result_name', 'sequence_id']].copy()
             indices_list.append(meta)
             
         except Exception as e:
