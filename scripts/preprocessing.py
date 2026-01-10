@@ -33,7 +33,8 @@ with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
     config = yaml.safe_load(f)
 
 # 버전 설정 로드 (v3.2)
-VERSION = config.get('version', 'v3.1')
+# 버전 관리 (v3.5 소프트 코딩 적용)
+VERSION = config['version']
 BASE_DIR = 'c:/Users/Public/Documents/DIK/deTACTer'
 
 RAW_DATA_PATH = f"{BASE_DIR}/{config['data']['raw_data_path']}"

@@ -44,7 +44,8 @@ CONFIG_PATH = 'c:/Users/Public/Documents/DIK/deTACTer/config.yaml'
 with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
     config = yaml.safe_load(f)
 
-VERSION = config.get('version', 'v3.1')
+# 버전 관리 (v3.5 소프트 코딩 적용)
+VERSION = config['version']
 BASE_DIR = 'c:/Users/Public/Documents/DIK/deTACTer'
 
 # 입력 및 출력 경로 설정 (버전별 폴더)
