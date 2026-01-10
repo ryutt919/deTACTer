@@ -1,37 +1,15 @@
-=== Data Quality Check Summary ===
+=== 데이터 기본 요약 ===
+None
 
-Total Rows: 579306
-Total Columns: 18
+=== 수치형 데이터 통계 ===
+             game_id      action_id  ...             dx             dy
+count  579306.000000  579306.000000  ...  579306.000000  579306.000000
+mean   126380.236524    1468.650566  ...       0.007504       0.005514
+std        56.778999     855.439247  ...      10.834591       9.809462
+min    126283.000000       0.000000  ...     -92.678376     -67.141772
+25%    126331.000000     731.000000  ...      -2.413635      -2.523177
+50%    126380.000000    1462.000000  ...       0.000000       0.000000
+75%    126428.000000    2194.000000  ...       2.405760       2.564399
+max    126480.000000    3519.000000  ...      99.489033      65.665472
 
---- Missing Values ---
-player_id              1
-result_name       349604
-player_name_ko         1
-position_name      70120
-main_position       1704
-
---- Data Types ---
-game_id             int64
-action_id           int64
-period_id           int64
-time_seconds      float64
-team_id             int64
-player_id         float64
-result_name        object
-start_x           float64
-start_y           float64
-end_x             float64
-end_y             float64
-dx                float64
-dy                float64
-type_name          object
-player_name_ko     object
-team_name_ko       object
-position_name      object
-main_position      object
-
---- Unique Values (Categorical) ---
-type_name: 37 unique values
-result_name: 11 unique values
-position_name: 16 unique values
-main_position: 14 unique values
+[8 rows x 12 columns]
