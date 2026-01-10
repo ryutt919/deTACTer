@@ -29,10 +29,20 @@ plt.rcParams['font.family'] = 'Malgun Gothic'
 plt.rcParams['axes.unicode_minus'] = False
 
 # =========================================================
-# 경로 설정
+# 설정 및 경로 로드 (v3.2)
 # =========================================================
-DATA_DIR = 'c:/Users/Public/Documents/DIK/deTACTer/data/refined/'
-OUTPUT_DIR = 'c:/Users/Public/Documents/DIK/deTACTer/results/visualizations/'
+import yaml
+
+CONFIG_PATH = 'c:/Users/Public/Documents/DIK/deTACTer/config.yaml'
+with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+    config = yaml.safe_load(f)
+
+VERSION = config.get('version', 'v3.1')
+BASE_DIR = 'c:/Users/Public/Documents/DIK/deTACTer'
+
+# 입력 및 출력 경로 설정 (버전별 폴더)
+DATA_DIR = f"{BASE_DIR}/data/refined/{VERSION}/"
+OUTPUT_DIR = f"{BASE_DIR}/results/visualizations/{VERSION}/"
 
 # 출력 디렉토리 생성
 os.makedirs(OUTPUT_DIR, exist_ok=True)

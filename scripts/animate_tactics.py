@@ -29,10 +29,23 @@ plt.rcParams['font.family'] = 'Malgun Gothic'
 plt.rcParams['axes.unicode_minus'] = False
 
 # =========================================================
-# 경로 설정
+# 설정 및 경로 로드 (v3.2)
 # =========================================================
-DATA_DIR = 'c:/Users/Public/Documents/DIK/deTACTer/data/refined/'
-OUTPUT_DIR = 'c:/Users/Public/Documents/DIK/deTACTer/results/animations/'
+import yaml
+import os
+
+CONFIG_PATH = 'c:/Users/Public/Documents/DIK/deTACTer/config.yaml'
+with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+    config = yaml.safe_load(f)
+
+VERSION = config.get('version', 'v3.1')
+BASE_DIR = 'c:/Users/Public/Documents/DIK/deTACTer'
+
+# 입력 및 출력 경로 설정 (버전별 폴더)
+DATA_DIR = f"{BASE_DIR}/data/refined/{VERSION}/"
+OUTPUT_DIR = f"{BASE_DIR}/results/animations/{VERSION}/"
+
+# 폴더 생성 보장
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # 실제 경기장 규격 (미터)
@@ -44,8 +57,8 @@ FRAME_INTERVAL = 300  # 밀리초 (프레임 간 간격)
 TRANSITION_FRAMES = 10  # 이벤트 간 보간 프레임 수
 
 # 시각적 요소 크기 (미터 단위)
-PLAYER_RADIUS = 1.2  # 선수 원 반경
-BALL_RADIUS = 1.5    # 공 반경 (사용자 요청: 1.5m)
+PLAYER_RADIUS = 1.5  # 선수 원 반경 (사용자 요청: 1.5m)
+BALL_RADIUS = 1.5    # 공 반경
 
 # =========================================================
 # 색상 팔레트 (이벤트 타입별)
@@ -209,10 +222,56 @@ def get_player_position(player_id, player_events, current_event_idx, progress):
 # 애니메이션 생성
 # =========================================================
 def create_event_based_animation(seq_df, sequence_id, output_path, title="전술 패턴"):
-    # 리시브 이벤트 필터링
-    # Pass Received, Ball Received 등을 제외하여 패스 동작만 남김
-    filtered_seq = seq_df[seq_df['sequence_id'] == sequence_id].sort_values('seq_position', ascending=False)
-    filtered_seq = filtered_seq[~filtered_seq['type_name'].isin(['Pass Received', 'Ball Received'])].reset_index(drop=True)
+    seq = seq_df[seq_df['sequence_id'] == sequence_id].sort_values('seq_position', ascending=False).reset_index(drop=True)
+    
+    # [고도화] 리시브 이벤트 필터링 및 전환 로직
+    processed_events = []
+    for _, row in seq.iterrows():
+        type_name = row['type_name']
+        sx, sy = row['start_x'], row['start_y']
+        ex, ey = row['end_x'], row['end_y']
+        
+        if type_name in ['Pass Received', 'Ball Received']:
+            # 시작/종료 좌표 차이가 매우 작은 경우 (정적 리시브) -> 제외
+            if abs(sx - ex) < 0.001 and abs(sy - ey) < 0.01: # y축도 유사도 체크
+                continue
+            else:
+                # 좌표가 다르면 Carry로 전환하여 이동 정보 보존
+                row['type_name'] = 'Carry'
+                row['spadl_type'] = 'dribble'
+                processed_events.append(row)
+        else:
+            processed_events.append(row)
+    
+    if not processed_events: return None
+    seq = pd.DataFrame(processed_events)
+
+    # [고도화] 동일한 선수의 연속된 Carry 이벤트 병합
+    merged_events = []
+    for _, row in seq.iterrows():
+        if not merged_events:
+            merged_events.append(row.to_dict())
+            continue
+            
+        last = merged_events[-1]
+        # 같은 선수이고, 현재와 이전이 모두 Carry(또는 변환된 Carry)이며, 위치가 이어짐
+        if (row['player_id'] == last['player_id'] and 
+            get_event_category(row['type_name'], row.get('spadl_type', '')) == 'carry' and 
+            get_event_category(last['type_name'], last.get('spadl_type', '')) == 'carry'):
+            
+            # 병합: 이전 이벤트의 종료 좌표를 현재의 종료 좌표로 업데이트 (연속 동작)
+            last['end_x'] = row['end_x']
+            last['end_y'] = row['end_y']
+            # is_outcome 플래그 보존
+            if row['is_outcome']: last['is_outcome'] = True
+        else:
+            merged_events.append(row.to_dict())
+    
+    merged_seq = pd.DataFrame(merged_events)
+
+    # 필터링: 리시브(정적) 제외하되, '성과 이벤트'는 보존
+    mask = merged_seq['type_name'].isin(['Pass Received', 'Ball Received']) & (~merged_seq['is_outcome'])
+    filtered_seq = merged_seq[~mask].reset_index(drop=True)
     
     if len(filtered_seq) == 0: return None
     
@@ -297,7 +356,8 @@ def create_event_based_animation(seq_df, sequence_id, output_path, title="전술
         event_label.set_color(curr_ev['color'])
         
         if prog >= 0.9 and len(event_markers) <= idx:
-            m = ax.scatter([curr_ev['end_x']], [curr_ev['end_y']], color=curr_ev['color'], s=40, alpha=0.5, edgecolor='none')
+            # 과거 이벤트 지점 마커 조정 (사용자 요청: 노란색, 투명도 0.6)
+            m = ax.scatter([curr_ev['end_x']], [curr_ev['end_y']], color='yellow', s=40, alpha=0.6, edgecolor='none')
             event_markers.append(m)
             
         return [ball_path_line, ball_circ, ball_pattern, event_label] + [m['circle'] for m in player_markers.values()]
@@ -322,9 +382,19 @@ def get_event_color(type_name, spadl_type=None):
 
 # 정적 플롯 (동일)
 def plot_sequence_static(seq_df, sequence_id, output_path, title="전술 패턴"):
-    seq = seq_df[seq_df['sequence_id'] == sequence_id].sort_values('seq_position', ascending=False)
-    seq = seq[~seq['type_name'].isin(['Pass Received', 'Ball Received'])].reset_index(drop=True)
-    if len(seq) == 0: return None
+    seq = seq_df[seq_df['sequence_id'] == sequence_id].sort_values('seq_position', ascending=False).reset_index(drop=True)
+    
+    # 동일한 필터링/전환 로직 적용
+    processed = []
+    for _, row in seq.iterrows():
+        sx, sy, ex, ey = row['start_x'], row['start_y'], row['end_x'], row['end_y']
+        if row['type_name'] in ['Pass Received', 'Ball Received']:
+            if abs(sx - ex) < 0.001 and abs(sy - ey) < 0.01: continue
+            row['type_name'] = 'Carry'
+        processed.append(row)
+    
+    if not processed: return None
+    seq = pd.DataFrame(processed)
     fig, ax = plt.subplots(figsize=(14, 9)); fig.patch.set_facecolor('#1a1a2e')
     draw_pitch_real_scale(ax)
     ax.set_title(title, fontsize=16, fontweight='bold', color='white', pad=15)
@@ -336,7 +406,8 @@ def plot_sequence_static(seq_df, sequence_id, output_path, title="전술 패턴"
         if px is not None: ax.plot([px, x], [py, y], '-', color='yellow', alpha=0.3)
         if get_event_category(row['type_name']) == 'pass':
             ax.add_patch(FancyArrowPatch((x,y), (ex,ey), arrowstyle='fancy', color=c, alpha=0.6))
-        ax.scatter([x], [y], color=c, s=100, edgecolor='white')
+        # 정적 플롯 마커 수정 (노란색, 투명도 0.6)
+        ax.scatter([x], [y], color='yellow', s=100, alpha=0.6, edgecolor='white', linewidth=1) 
         ax.annotate(f"{i+1}. {row['type_name']}", (x,y), color='white', fontsize=8)
         px, py = ex, ey
     plt.savefig(output_path, dpi=100, bbox_inches='tight', facecolor='#1a1a2e')

@@ -35,11 +35,26 @@ except ImportError:
     DTW_AVAILABLE = False
 
 # =========================================================
-# 경로 설정
+# 설정 및 경로 로드 (v3.2)
 # =========================================================
-SEQUENCES_PATH = 'c:/Users/Public/Documents/DIK/deTACTer/data/refined/attack_sequences.csv'
-STATS_PATH = 'c:/Users/Public/Documents/DIK/deTACTer/data/refined/attack_sequences_stats.csv'
-OUTPUT_DIR = 'c:/Users/Public/Documents/DIK/deTACTer/data/refined/'
+import yaml
+import os
+
+CONFIG_PATH = 'c:/Users/Public/Documents/DIK/deTACTer/config.yaml'
+with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+    config = yaml.safe_load(f)
+
+VERSION = config.get('version', 'v3.1')
+BASE_DIR = 'c:/Users/Public/Documents/DIK/deTACTer'
+
+# 입력 및 출력 경로 설정 (버전별 폴더)
+REFINED_DIR = f"{BASE_DIR}/data/refined/{VERSION}"
+SEQUENCES_PATH = f"{REFINED_DIR}/attack_sequences.csv"
+STATS_PATH = f"{REFINED_DIR}/attack_sequences_stats.csv"
+OUTPUT_DIR = f"{REFINED_DIR}/"
+
+# 폴더 생성 보장
+os.makedirs(REFINED_DIR, exist_ok=True)
 
 # 클러스터링 파라미터
 MAX_SEQUENCES = 2000  # DTW 계산 시간을 위해 샘플링 (필요시 조정)

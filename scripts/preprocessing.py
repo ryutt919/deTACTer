@@ -27,13 +27,24 @@ if sys.stdout.encoding != 'utf-8':
 # =========================================================
 # 설정 로드
 # =========================================================
+# 설정 로드
 CONFIG_PATH = 'c:/Users/Public/Documents/DIK/deTACTer/config.yaml'
 with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
     config = yaml.safe_load(f)
 
-RAW_DATA_PATH = 'c:/Users/Public/Documents/DIK/deTACTer/' + config['data']['raw_data_path']
-MATCH_INFO_PATH = 'c:/Users/Public/Documents/DIK/deTACTer/' + config['data']['match_info_path']
-OUTPUT_PATH = 'c:/Users/Public/Documents/DIK/deTACTer/data/refined/preprocessed_data.csv'
+# 버전 설정 로드 (v3.2)
+VERSION = config.get('version', 'v3.1')
+BASE_DIR = 'c:/Users/Public/Documents/DIK/deTACTer'
+
+RAW_DATA_PATH = f"{BASE_DIR}/{config['data']['raw_data_path']}"
+MATCH_INFO_PATH = f"{BASE_DIR}/{config['data']['match_info_path']}"
+
+# 버전별 출력 경로 설정
+OUTPUT_DIR = f"{BASE_DIR}/data/refined/{VERSION}"
+OUTPUT_PATH = f"{OUTPUT_DIR}/preprocessed_data.csv"
+
+# 출력 폴더 생성
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # 필드 규격 (국제 표준)
 FIELD_LENGTH = 105.0
@@ -62,43 +73,12 @@ def load_data():
 # =========================================================
 def unify_attack_direction(df, match_info):
     """
-    각 (game_id, period_id, team_id)별로 골키퍼의 평균 위치를 분석하여
-    자팀 골대가 오른쪽(105m)에 있으면 좌표를 반전시킵니다.
+    [v3.1 수정] 팀별 좌표 반전 로직을 제거합니다.
+    좌표 반전은 이제 시퀀스 추출 단계에서 '공격 팀' 기준으로 일괄 수행됩니다.
+    이 함수는 공격 방향 판별을 위한 기초 데이터(GK 평균 위치 등)가 필요한 경우를 위해
+    데이터만 정제하거나, 현재는 로직을 스킵합니다.
     """
-    print("[2/5] 공격 방향 통일 (L->R)...")
-    
-    # 골키퍼 위치 추출 (position_name이 'GK'인 경우)
-    gk_mask = (df['position_name'] == 'GK') | (df['main_position'] == 'GK')
-    gk_df = df[gk_mask].copy()
-    
-    # 각 (game_id, period_id, team_id)별 골키퍼 평균 X좌표
-    gk_avg_x = gk_df.groupby(['game_id', 'period_id', 'team_id'])['start_x'].mean().reset_index()
-    gk_avg_x.columns = ['game_id', 'period_id', 'team_id', 'gk_avg_x']
-    
-    # 골키퍼 평균 X가 52.5(중앙)보다 크면 자팀 골대가 오른쪽 -> 좌표 반전 필요
-    gk_avg_x['needs_flip'] = gk_avg_x['gk_avg_x'] > (FIELD_LENGTH / 2)
-    
-    # 원본 df에 merge
-    df = df.merge(gk_avg_x[['game_id', 'period_id', 'team_id', 'needs_flip']], 
-                  on=['game_id', 'period_id', 'team_id'], how='left')
-    
-    # needs_flip이 NaN인 경우(골키퍼 데이터 없음) -> 반전하지 않음
-    df['needs_flip'] = df['needs_flip'].fillna(False)
-    
-    # 좌표 반전 적용
-    flip_mask = df['needs_flip']
-    df.loc[flip_mask, 'start_x'] = FIELD_LENGTH - df.loc[flip_mask, 'start_x']
-    df.loc[flip_mask, 'end_x'] = FIELD_LENGTH - df.loc[flip_mask, 'end_x']
-    df.loc[flip_mask, 'start_y'] = FIELD_WIDTH - df.loc[flip_mask, 'start_y']
-    df.loc[flip_mask, 'end_y'] = FIELD_WIDTH - df.loc[flip_mask, 'end_y']
-    # dx, dy도 부호 반전
-    df.loc[flip_mask, 'dx'] = -df.loc[flip_mask, 'dx']
-    df.loc[flip_mask, 'dy'] = -df.loc[flip_mask, 'dy']
-    
-    # 임시 컬럼 제거
-    df = df.drop(columns=['needs_flip'])
-    
-    print(f"    -> 반전 적용: {flip_mask.sum():,} rows")
+    print("[2/5] 공격 방향 통일 로직 스킵 (시퀀스 추출 단계로 이관)...")
     return df
 
 # =========================================================

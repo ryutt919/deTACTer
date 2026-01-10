@@ -28,9 +28,23 @@ CONFIG_PATH = 'c:/Users/Public/Documents/DIK/deTACTer/config.yaml'
 with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
     config = yaml.safe_load(f)
 
-# 경로 설정
-PREPROCESSED_PATH = 'c:/Users/Public/Documents/DIK/deTACTer/data/refined/preprocessed_data.csv'
-SEQUENCES_OUTPUT_PATH = 'c:/Users/Public/Documents/DIK/deTACTer/data/refined/attack_sequences.csv'
+# 설정 로드
+CONFIG_PATH = 'c:/Users/Public/Documents/DIK/deTACTer/config.yaml'
+with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+    config = yaml.safe_load(f)
+
+# 버전 설정 로드 (v3.2)
+VERSION = config.get('version', 'v3.1')
+BASE_DIR = 'c:/Users/Public/Documents/DIK/deTACTer'
+
+# 입력 및 출력 경로 설정 (버전별 폴더)
+REFINED_DIR = f"{BASE_DIR}/data/refined/{VERSION}"
+PREPROCESSED_PATH = f"{REFINED_DIR}/preprocessed_data.csv"
+SEQUENCES_OUTPUT_PATH = f"{REFINED_DIR}/attack_sequences.csv"
+
+# 폴더 생성 보장
+import os
+os.makedirs(REFINED_DIR, exist_ok=True)
 
 # 시퀀스 길이 하이퍼파라미터 (config.yaml에서 로드하거나 기본값 사용)
 ATTACK_LEN = config.get('sequence', {}).get('attack_len', 5)
@@ -59,10 +73,9 @@ def load_preprocessed_data():
 def identify_outcome_events(df):
     """
     성과 이벤트를 식별합니다.
-    - 슈팅(shot) 이벤트
-    - 패널티 박스 진입 이벤트 (end_x > 0.84 and 0.2 < end_y < 0.8)
+    - [v3.1] 연속된 성과 이벤트 중 '첫 번째'만 인정합니다.
     """
-    print("[2/4] 성과 이벤트 식별 중...")
+    print("[2/4] 성과 이벤트 식별 중 (v3.1: 첫 번째 성과 우선)...")
     
     # 슈팅 이벤트
     is_shot = df['spadl_type'].str.contains('shot', case=False, na=False)
@@ -77,75 +90,149 @@ def identify_outcome_events(df):
     # non_action 제외
     is_valid_action = df['spadl_type'] != 'non_action'
     
-    # 성과 이벤트 마킹
-    df['is_outcome'] = (is_shot | is_box_entry) & is_valid_action
+    # 일시적 성과 마킹
+    temp_outcome = (is_shot | is_box_entry) & is_valid_action
+    
+    # 연속된 성과 중 첫 번째만 남기기
+    df['temp_outcome'] = temp_outcome
+    df['prev_outcome'] = df.groupby(['game_id', 'period_id', 'team_id'])['temp_outcome'].shift(1).fillna(False)
+    df['is_outcome'] = df['temp_outcome'] & ~df['prev_outcome']
+    
+    # 임시 컬럼 제거
+    df.drop(columns=['temp_outcome', 'prev_outcome'], inplace=True)
     
     outcome_count = df['is_outcome'].sum()
-    print(f"    -> 성과 이벤트: {outcome_count:,}개 (슈팅: {is_shot.sum():,}, 박스진입: {is_box_entry.sum():,})")
+    print(f"    -> 유니크 성과 이벤트: {outcome_count:,}개")
     
     return df
 
-# =========================================================
-# 3. 역추적 기반 시퀀스 추출
-# =========================================================
 def extract_sequences(df):
     """
     성과 이벤트로부터 역추적하여 시퀀스를 추출합니다.
-    - 공격 시퀀스: 성과 시점부터 역순 1~ATTACK_LEN개
-    - 빌드업 시퀀스: 그 이전 BUILDUP_LEN개
+    - [v3.1] 시퀀스 간 액션 중복을 허용하지 않습니다 (No Overlap).
+    - [v3.1] 시퀀스 단위로 공격 방향을 통합합니다.
+    - [v3.1] 리시브 이벤트를 정밀 보정합니다.
     """
-    print(f"[3/4] 시퀀스 추출 중 (공격: {ATTACK_LEN}개, 빌드업: {BUILDUP_LEN}개)...")
+    print(f"[3/4] 시퀀스 추출 및 보정 중 (No Overlap)...")
     
-    # 게임별, 피리어드별로 정렬
-    df = df.sort_values(['game_id', 'period_id', 'time_seconds']).reset_index(drop=True)
-    
-    # 성과 이벤트의 인덱스 추출
+    df = df.sort_values(['game_id', 'period_id', 'time_seconds', 'action_id']).reset_index(drop=True)
     outcome_indices = df[df['is_outcome']].index.tolist()
     
+    used_action_ids = set()
     sequences = []
     seq_id = 0
     
     for outcome_idx in outcome_indices:
-        # 역추적 범위 계산
-        start_idx = max(0, outcome_idx - TOTAL_SEQ_LEN + 1)
-        end_idx = outcome_idx + 1
+        # 1. 역추적 (중복 방지)
+        seq_indices = []
+        for i in range(outcome_idx, outcome_idx - TOTAL_SEQ_LEN, -1):
+            if i < 0: break
+            if df.loc[i, 'game_id'] != df.loc[outcome_idx, 'game_id'] or \
+               df.loc[i, 'period_id'] != df.loc[outcome_idx, 'period_id']:
+                break
+            if df.loc[i, 'action_id'] in used_action_ids:
+                break
+            seq_indices.append(i)
         
-        # 시퀀스 추출 (outcome 포함)
-        seq_df = df.iloc[start_idx:end_idx].copy()
+        if not seq_indices: continue
+        seq_indices.reverse()
+        seq_df = df.loc[seq_indices].copy()
         
-        # 같은 game_id, period_id인지 확인 (다르면 건너뜀)
-        if seq_df['game_id'].nunique() > 1 or seq_df['period_id'].nunique() > 1:
-            continue
+        attacking_team = seq_df['team_id'].iloc[-1]
         
-        # 시퀀스 내 위치 라벨링 (역순 기준)
-        seq_len = len(seq_df)
-        positions = list(range(seq_len, 0, -1))  # [n, n-1, ..., 2, 1]
-        seq_df['seq_position'] = positions
+        # 2. 공격 방향 통일 (시퀀스 레벨)
+        # GK 위치를 찾아 공격 방향 판단 (L->R로 통일)
+        gk_x = df[(df['game_id'] == seq_df['game_id'].iloc[0]) & 
+                  (df['team_id'] == attacking_team) & 
+                  ((df['position_name'] == 'GK') | (df['main_position'] == 'GK'))]['start_x'].mean()
         
-        # 공격/빌드업 구분
-        seq_df['seq_phase'] = seq_df['seq_position'].apply(
-            lambda x: 'attack' if x <= ATTACK_LEN else 'buildup'
-        )
+        # GK가 오른쪽에 있으면 자팀 골대가 오른쪽 -> 반전 필요
+        needs_flip = gk_x > 0.5
+        if needs_flip:
+            for col in ['start_x', 'end_x']: seq_df[col] = 1.0 - seq_df[col]
+            for col in ['start_y', 'end_y']: seq_df[col] = 1.0 - seq_df[col]
+            if 'dx' in seq_df.columns: seq_df['dx'] = -seq_df['dx']
+            if 'dy' in seq_df.columns: seq_df['dy'] = -seq_df['dy']
+
+        # 3. 리시브 로직 보정 (v3.1)
+        # 리시브는 제자리로, 이동은 Carry로
+        refined_rows = []
+        rows = [row for _, row in seq_df.iterrows()]
         
-        # 시퀀스 ID 부여
-        seq_df['sequence_id'] = seq_id
+        i = 0
+        while i < len(rows):
+            curr = rows[i].copy()
+            if curr['type_name'] == 'Pass Received':
+                dist = np.sqrt((curr['start_x'] - curr['end_x'])**2 + (curr['start_y'] - curr['end_y'])**2)
+                is_moving = dist > 1e-5
+                
+                next_node = rows[i+1] if i + 1 < len(rows) else None
+                
+                # [A-1] 중복 리시브 삭제
+                if next_node is not None and \
+                   abs(curr['start_x'] - next_node['start_x']) < 1e-5 and \
+                   abs(curr['end_x'] - next_node['end_x']) < 1e-5:
+                    i += 1
+                    continue
+                
+                # [A-2] 이동 리시브 처리
+                if is_moving:
+                    if next_node is not None and next_node['type_name'] == 'Carry':
+                        # 다음 Carry의 시작을 이 리시브의 시작으로 땡기고 리시브 삭제
+                        rows[i+1]['start_x'] = curr['start_x']
+                        rows[i+1]['start_y'] = curr['start_y']
+                        i += 1
+                        continue
+                    else:
+                        # 리시브를 Carry로 변환
+                        curr['type_name'] = 'Carry'
+                        curr['spadl_type'] = 'dribble'
+                
+                # [B] 정적 리시브 간극 보정
+                elif next_node is not None and next_node['type_name'] != 'Carry':
+                    gap = np.sqrt((curr['end_x'] - next_node['start_x'])**2 + (curr['end_y'] - next_node['start_y'])**2)
+                    if gap > 1e-5:
+                        # 리시브를 Carry로 변환하여 종료 지점을 다음 액션 시작점으로 보정
+                        curr['type_name'] = 'Carry'
+                        curr['spadl_type'] = 'dribble'
+                        curr['end_x'] = next_node['start_x']
+                        curr['end_y'] = next_node['start_y']
+                
+                # 만약 정적 리시브이고 위 조건에 안걸리면 (삭제 대상)
+                if curr['type_name'] == 'Pass Received' and not is_moving:
+                    # 사용자 요청: 리시브 이벤트 시작, 종료 위치가 같은 경우는 모두 삭제
+                    i += 1
+                    continue
+
+            refined_rows.append(curr)
+            i += 1
+            
+        if not refined_rows: continue
         
-        # 메타데이터 추가
-        seq_df['outcome_type'] = df.loc[outcome_idx, 'spadl_type']
-        seq_df['outcome_result'] = df.loc[outcome_idx, 'spadl_result']
-        seq_df['team_id'] = df.loc[outcome_idx, 'team_id']
+        refined_seq = pd.DataFrame(refined_rows)
         
-        sequences.append(seq_df)
+        # 4. 후처리 (포지션 재배정 및 ID 부여)
+        seq_len = len(refined_seq)
+        refined_seq['seq_position'] = range(seq_len, 0, -1)
+        refined_seq['seq_phase'] = refined_seq['seq_position'].apply(lambda x: 'attack' if x <= ATTACK_LEN else 'buildup')
+        refined_seq['sequence_id'] = seq_id
+        
+        # 메타데이터 추출 (원본 outcome 기준)
+        orig_outcome = df.loc[outcome_idx]
+        refined_seq['outcome_type'] = orig_outcome['spadl_type']
+        refined_seq['outcome_result'] = orig_outcome['spadl_result']
+        
+        sequences.append(refined_seq)
+        used_action_ids.update(seq_df['action_id'].tolist())
         seq_id += 1
     
     if sequences:
         result_df = pd.concat(sequences, ignore_index=True)
-        print(f"    -> 추출 완료: {seq_id:,}개 시퀀스, {len(result_df):,} rows")
+        print(f"    -> 최종 추출: {seq_id:,}개 시퀀스, {len(result_df):,} rows")
         return result_df
     else:
-        print("    -> 추출된 시퀀스 없음!")
         return pd.DataFrame()
-
+    
 # =========================================================
 # 4. 시퀀스별 통계 및 템포 집계
 # =========================================================
