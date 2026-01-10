@@ -59,7 +59,8 @@ FIELD_WIDTH = 68
 
 # 애니메이션 설정
 FPS = 30  # 초당 프레임 수
-MAX_GAP_SECONDS = 1.0  # 스마트 타임 압축: 이벤트 간 최대 간격 (1초)
+# v4.0 수정: 스마트 타임 압축 제거 -> 실제 시간 사용
+USE_REAL_TIME = True  # 실제 time_seconds 그대로 사용
 
 # 시각적 요소 크기
 PLAYER_RADIUS = 1.5
@@ -156,13 +157,13 @@ def get_event_color(type_name, spadl_type=None):
     return EVENT_COLORS.get(spadl_type, EVENT_COLORS['default'])
 
 # =========================================================
-# 스마트 타임 프레임 계산 (v4.0 핵심)
+# 프레임 계산 (v4.0: 실제 시간 사용)
 # =========================================================
-def calculate_smart_frames(events):
+def calculate_frames(events):
     """
-    스마트 타임 압축을 적용하여 각 이벤트의 프레임 정보를 계산합니다.
+    실제 time_seconds를 사용하여 각 이벤트의 프레임 정보를 계산합니다.
     
-    - 이벤트 간 간격이 MAX_GAP_SECONDS를 초과하면 압축합니다.
+    - 이벤트 간 간격을 그대로 유지 (실제 경기 시간 재현)
     - 반환: 각 이벤트의 시작 프레임, 종료 프레임, 프레임 수
     """
     frame_info = []
@@ -173,14 +174,13 @@ def calculate_smart_frames(events):
         if i < len(events) - 1:
             next_ev = events[i + 1]
             gap = next_ev['time_seconds'] - ev['time_seconds']
-            # 스마트 압축: MAX_GAP_SECONDS 초과 시 제한
-            compressed_gap = min(gap, MAX_GAP_SECONDS)
+            # 실제 시간 그대로 사용 (압축 없음)
         else:
             # 마지막 이벤트: 1초 추가
-            compressed_gap = 1.0
+            gap = 1.0
         
         # 이 구간의 프레임 수
-        num_frames = int(compressed_gap * FPS)
+        num_frames = int(gap * FPS)
         num_frames = max(num_frames, 1)  # 최소 1프레임
         
         frame_info.append({
@@ -266,9 +266,16 @@ def get_player_position_v4(player_id, player_timeline, current_event_idx, progre
     future_events = [e for e in timeline if e['event_idx'] > current_event_idx]
     
     if past_events:
-        # 마지막으로 수행한 이벤트의 종료 위치
+        # 마지막으로 수행한 이벤트
         last_ev = past_events[-1]
-        last_x, last_y = last_ev['end_x'], last_ev['end_y']
+        
+        # 마지막 이벤트가 패스였다면 start 위치에 고정되어야 함 (공만 이동했으므로)
+        # 마지막 이벤트가 드리블이었다면 end 위치에 있음
+        if last_ev['category'] == 'carry':
+            last_x, last_y = last_ev['end_x'], last_ev['end_y']
+        else:
+            # 패스 후에는 제자리 (start 위치)
+            last_x, last_y = last_ev['start_x'], last_ev['start_y']
         
         if future_events:
             # 다음 이벤트까지 이동해야 함
@@ -277,15 +284,14 @@ def get_player_position_v4(player_id, player_timeline, current_event_idx, progre
             
             # 이동이 필요한지 확인 (좌표 차이가 0.01 이상인 경우)
             if abs(last_x - next_x) > 0.01 or abs(last_y - next_y) > 0.01:
-                # 이동 중: 현재 이벤트와 다음 이벤트 사이의 프레임 진행도에 따라 보간
-                # 단순화: 현재 progress를 사용하여 이동
+                # 이동 중: 보간
                 x = last_x + (next_x - last_x) * progress
                 y = last_y + (next_y - last_y) * progress
             else:
-                # 이동 불필요: 제자리 대기
+                # 이동 불필요
                 x, y = last_x, last_y
         else:
-            # 더 이상 이벤트 없음: 마지막 위치 유지
+            # 더 이상 이벤트 없음
             x, y = last_x, last_y
         
         return x, y, False
@@ -387,8 +393,8 @@ def create_animation_v4(seq_df, sequence_id, output_path, title="전술 패턴")
             'time_seconds': row['time_seconds'] - start_time
         })
     
-    # 스마트 프레임 계산
-    frame_info, total_frames = calculate_smart_frames(events)
+    # 스마트 프레임 계산 (v4.0: 실제 시간 사용)
+    frame_info, total_frames = calculate_frames(events)
     
     # 선수 타임라인 구축
     player_timeline = build_player_timeline(filtered_seq, events)
