@@ -1,4 +1,4 @@
-version: "v4.4"
+version: "v4.5"
 data:
   raw_data_path: "data/raw_data.csv"
   match_info_path: "data/match_info.csv"
@@ -10,7 +10,7 @@ features:
 # 시퀀스 추출 하이퍼파라미터
 sequence:
   attack_len: 5      # 공격 시퀀스 길이 (성과 직전 1~5개)
-  buildup_len: 4     # 빌드업 시퀀스 길이 (6~9개)
+  buildup_len: 8     # 빌드업 시퀀스 길이 (v4.5 상향 조정)
 
 model:
   type: "CatBoostClassifier"

@@ -29,9 +29,10 @@ for sid in total_seqs:
             y_range_pass = False
             break
     
-    if pass_count < 3 or not y_range_pass:
+    if pass_count < 5 or not y_range_pass:
         fail_count += 1
-        print(f'FAIL: Seq {sid} -> Passes: {pass_count}, Y-Range: {"OK" if y_range_pass else "OUT"}')
+        y_val = outcome['start_y'].iloc[0] if not outcome.empty else 'N/A'
+        print(f'FAIL: Seq {sid} -> Passes: {pass_count}, Y-Range: {"OK" if y_range_pass else f"OUT (y={y_val})"}')
 
 print(f'\nTotal: {len(total_seqs)} sequences')
 print(f'Violations: {fail_count}')

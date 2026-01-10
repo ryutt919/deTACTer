@@ -198,12 +198,12 @@ def extract_sequences(df):
         if len(seq_df) < 5:
             continue
         
-        # [v4.4] 의미 있는 전술 패턴 확보를 위해 성과 이벤트를 제외한 나머지 액션들 중
-        # 최소 3개의 패스(순수 Pass만, Cross 제외)가 포함되어야 함
+        # [v4.5] 의미 있는 전술 패턴 확보를 위해 성과 이벤트를 제외한 나머지 액션들 중
+        # 최소 5개의 패스(순수 Pass만, Cross 제외)가 포함되어야 함
         # - 단순 롱볼 한 번이나 드리블 후 슛 같은 단발성 패턴은 제외
         non_outcome_events = seq_df[seq_df['is_outcome'] == False]
         pass_count = (non_outcome_events['type_name'] == 'Pass').sum()
-        if pass_count < 3:
+        if pass_count < 5:
             continue
         
         # [v4.1] 빌드업 구역 필터링 (패널티 박스 내부 시작 시퀀스 제거)
@@ -321,6 +321,14 @@ def extract_sequences(df):
         refined_seq['seq_phase'] = refined_seq['seq_position'].apply(lambda x: 'attack' if x <= ATTACK_LEN else 'buildup')
         refined_seq['sequence_id'] = seq_id
         
+        # [v4.5] 정규화(반전) 후에도 성과 이벤트의 Y 좌표가 지정된 범위 내에 있는지 확인
+        # (정규화 전 필터링을 했더라도 반전 시 미세하게 범위(0.36~0.635)를 벗어날 수 있음)
+        outcome_events = refined_seq[refined_seq['is_outcome'] == True]
+        if not outcome_events.empty:
+            final_y = outcome_events['start_y'].iloc[0]
+            if final_y < PENALTY_BOX_Y_MIN or final_y > PENALTY_BOX_Y_MAX:
+                continue
+                
         # 메타데이터 추출 (원본 outcome 기준)
         orig_outcome = df.loc[outcome_idx]
         refined_seq['outcome_type'] = orig_outcome['spadl_type']
