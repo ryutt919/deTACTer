@@ -38,7 +38,7 @@ CONFIG_PATH = 'c:/Users/Public/Documents/DIK/deTACTer/config.yaml'
 with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
     config = yaml.safe_load(f)
 
-VERSION = config.get('version', 'v3.3')
+VERSION = config.get('version', 'v3.4')
 BASE_DIR = 'c:/Users/Public/Documents/DIK/deTACTer'
 
 # 입력 및 출력 경로 설정 (버전별 폴더)
@@ -297,7 +297,8 @@ def create_event_based_animation(seq_df, sequence_id, output_path, title="전술
             'category': get_event_category(row['type_name'], row.get('spadl_type', '')),
             'color': get_event_color(row['type_name'], row.get('spadl_type', '')),
             'team_color': TEAM_COLORS['attacking'] if is_attacking else TEAM_COLORS['defending'],
-            'player_name': row.get('player_name_ko', '')[:6] if pd.notna(row.get('player_name_ko', '')) else ''
+            'player_name': row.get('player_name_ko', '')[:6] if pd.notna(row.get('player_name_ko', '')) else '',
+            'team_name': row.get('team_name_ko', 'Unknown')
         })
     
     fig, ax = plt.subplots(figsize=(14, 9))
@@ -370,7 +371,7 @@ def create_event_based_animation(seq_df, sequence_id, output_path, title="전술
             ball_path_x.append(bx); ball_path_y.append(by)
             ball_path_line.set_data(ball_path_x, ball_path_y)
             
-        event_label.set_text(f"Event {idx+1}: {curr_ev['player_name']} - {curr_ev['type_name']}")
+        event_label.set_text(f"[{curr_ev['team_name']}] {curr_ev['player_name']}: {curr_ev['type_name']}")
         event_label.set_color(curr_ev['color'])
         
         if prog >= 0.9 and len(event_markers) <= idx:

@@ -72,38 +72,51 @@ def load_preprocessed_data():
 # =========================================================
 def identify_outcome_events(df):
     """
-    성과 이벤트를 식별합니다.
-    - [v3.1] 연속된 성과 이벤트 중 '첫 번째'만 인정합니다.
+    성과 이벤트를 식별합니다 (v3.4 고도화).
+    - 팀별/기간별 공격 방향을 고려하여 박스 진입을 판단합니다.
+    - 수비적 액션은 성과에서 제외합니다.
     """
-    print("[2/4] 성과 이벤트 식별 중 (v3.1: 첫 번째 성과 우선)...")
+    print("[2/4] 성과 이벤트 식별 중 (v3.4: 방향성 고려 및 수비 제외)...")
     
-    # 슈팅 이벤트
+    # 정렬 (shift 연산 보장)
+    df = df.sort_values(['game_id', 'period_id', 'time_seconds', 'action_id']).reset_index(drop=True)
+    
+    # 1. 팀별/기간별 GK 위치 분석으로 공격 방향 판별
+    gk_stats = df[(df['position_name'] == 'GK') | (df['main_position'] == 'GK')].groupby(
+        ['game_id', 'period_id', 'team_id']
+    )['start_x'].mean().reset_index()
+    gk_stats.rename(columns={'start_x': 'gk_x'}, inplace=True)
+    
+    df = df.merge(gk_stats, on=['game_id', 'period_id', 'team_id'], how='left')
+    
+    # 공격 방향 플래그 (True: L->R, False: R->L)
+    # GK가 왼쪽(<0.5)에 있으면 L->R 공격
+    df['is_l_to_r'] = df['gk_x'].fillna(0.0) < 0.5
+    
+    # 2. 성과 조건 정의
     is_shot = df['spadl_type'].str.contains('shot', case=False, na=False)
     
-    # 박스 진입 이벤트 (end 좌표 기준)
+    # 박스 진입 (공격 방향에 따라 타겟 진영이 다름)
     is_box_entry = (
-        (df['end_x'] > PENALTY_BOX_X) & 
-        (df['end_y'] > PENALTY_BOX_Y_MIN) & 
-        (df['end_y'] < PENALTY_BOX_Y_MAX)
+        (df['is_l_to_r'] & (df['end_x'] > PENALTY_BOX_X)) |
+        (~df['is_l_to_r'] & (df['end_x'] < (1.0 - PENALTY_BOX_X)))
     )
     
-    # non_action 제외
-    is_valid_action = df['spadl_type'] != 'non_action'
+    # 수비적 액션 제외 (인터셉트, 클리어링, 태클 등은 '공격 성과'로 보지 않음)
+    defensive_types = ['interception', 'tackle', 'clearance', 'keeper_save']
+    is_defensive = df['spadl_type'].isin(defensive_types)
+    is_valid_action = (df['spadl_type'] != 'non_action') & (~is_defensive)
     
     # 일시적 성과 마킹
-    temp_outcome = (is_shot | is_box_entry) & is_valid_action
+    df['temp_outcome'] = (is_shot | is_box_entry) & is_valid_action
     
-    # 연속된 성과 중 첫 번째만 남기기
-    df['temp_outcome'] = temp_outcome
-    df['prev_outcome'] = df.groupby(['game_id', 'period_id', 'team_id'])['temp_outcome'].shift(1).fillna(False)
-    df['is_outcome'] = df['temp_outcome'] & ~df['prev_outcome']
+    # [v3.4] 연속된 성과 중 첫 번째만 남기기 (팀별/기간별 소유권 시작점 의미)
+    df['is_outcome'] = df['temp_outcome'] & ~(df.groupby(['game_id', 'period_id', 'team_id'])['temp_outcome'].shift(1).fillna(False))
     
     # 임시 컬럼 제거
-    df.drop(columns=['temp_outcome', 'prev_outcome'], inplace=True)
+    df.drop(columns=['temp_outcome', 'gk_x', 'is_l_to_r'], inplace=True)
     
-    outcome_count = df['is_outcome'].sum()
-    print(f"    -> 유니크 성과 이벤트: {outcome_count:,}개")
-    
+    print(f"    -> 유니크 성과 이벤트: {df['is_outcome'].sum():,}개")
     return df
 
 def extract_sequences(df):
@@ -118,13 +131,25 @@ def extract_sequences(df):
     df = df.sort_values(['game_id', 'period_id', 'time_seconds', 'action_id']).reset_index(drop=True)
     outcome_indices = df[df['is_outcome']].index.tolist()
     
+    # [v3.4] 방향 판별을 위한 GK 정보 재추출 (identify_outcome_events에서 썼던 것과 동일 로직)
+    gk_stats = df[(df['position_name'] == 'GK') | (df['main_position'] == 'GK')].groupby(
+        ['game_id', 'period_id', 'team_id']
+    )['start_x'].mean().reset_index()
+    
     used_action_ids = set()
+    skip_until_idx = -1
+    skipping_team_id = -1
     sequences = []
     seq_id = 0
     
     for outcome_idx in outcome_indices:
-        # 1. 역추적 (배타적 시퀀스 추출)
-        # 이미 다른 시퀀스(성과)에 포함된 액션이라면 이 성과는 별도의 시퀀스를 만들지 않음
+        current_team = df.loc[outcome_idx, 'team_id']
+        
+        # 1. 동적 스킵 로직 (v3.4)
+        if outcome_idx <= skip_until_idx and current_team == skipping_team_id:
+            continue
+            
+        # 2. 역추적
         if df.loc[outcome_idx, 'action_id'] in used_action_ids:
             continue
             
@@ -134,7 +159,6 @@ def extract_sequences(df):
             if df.loc[i, 'game_id'] != df.loc[outcome_idx, 'game_id'] or \
                df.loc[i, 'period_id'] != df.loc[outcome_idx, 'period_id']:
                 break
-            # 역추적 중 다른 시퀀스에 쓰인 액션을 만나면 중단 (공격 흐름의 경계)
             if df.loc[i, 'action_id'] in used_action_ids:
                 break
             seq_indices.append(i)
@@ -143,31 +167,53 @@ def extract_sequences(df):
         seq_indices.reverse()
         seq_df = df.loc[seq_indices].copy()
         
-        # 사용된 액션 ID 등록 (중복 방지 및 파편화 방지)
+        # 사용된 액션 등록
         used_action_ids.update(seq_df['action_id'].tolist())
         
-        attacking_team = seq_df['team_id'].iloc[-1]
+        # [v3.4] 다음 스킵 포인트 업데이트
+        skipping_team_id = current_team
+        temp_skip_idx = outcome_idx + 4
+        ptr = outcome_idx + 1
+        while ptr < len(df):
+            if df.loc[ptr, 'game_id'] != df.loc[outcome_idx, 'game_id'] or \
+               df.loc[ptr, 'period_id'] != df.loc[outcome_idx, 'period_id'] or \
+               df.loc[ptr, 'team_id'] != current_team:
+                break
+            
+            # 공격 방향에 따른 박스 내부 여부 판단
+            gk_row = gk_stats[(gk_stats['game_id'] == df.loc[ptr, 'game_id']) & 
+                              (gk_stats['period_id'] == df.loc[ptr, 'period_id']) & 
+                              (gk_stats['team_id'] == current_team)]
+            is_l_to_r = gk_row['start_x'].iloc[0] < 0.5 if not gk_row.empty else True
+            
+            ex = df.loc[ptr, 'end_x']
+            ey = df.loc[ptr, 'end_y']
+            if is_l_to_r:
+                in_box = (ex > PENALTY_BOX_X) and (ey > PENALTY_BOX_Y_MIN) and (ey < PENALTY_BOX_Y_MAX)
+            else:
+                in_box = (ex < (1.0 - PENALTY_BOX_X)) and (ey > PENALTY_BOX_Y_MIN) and (ey < PENALTY_BOX_Y_MAX)
+            
+            if in_box:
+                temp_skip_idx = ptr
+                ptr += 1
+            else:
+                break
+        skip_until_idx = temp_skip_idx
         
-        # 2. 공격 방향 통일 (시퀀스 레벨 - GK 위치 기준)
-        # [v3.3 사용자 피드백] 공격 팀의 GK는 0에 가까워야 함.
-        # 해당 시퀀스 시점 전후로 공격 팀의 GK 위치를 찾아 방향 판단
-        gk_events = df[(df['game_id'] == seq_df['game_id'].iloc[0]) & 
-                      (df['team_id'] == attacking_team) & 
-                      ((df['position_name'] == 'GK') | (df['main_position'] == 'GK'))]
+        # 3. 공격 방향 정규화 (L->R로 통일)
+        gk_row = gk_stats[(gk_stats['game_id'] == seq_df['game_id'].iloc[0]) & 
+                          (gk_stats['period_id'] == seq_df['period_id'].iloc[0]) & 
+                          (gk_stats['team_id'] == current_team)]
         
-        if not gk_events.empty:
-            # 슛 또는 성과 이벤트 시점과 가까운 GK 위치 참조
-            gk_x = gk_events['start_x'].mean()
-            # GK가 0.5보다 오른쪽에 있으면 공격 팀의 GK가 오른쪽에 있는 것임.
-            # 사용자 요청: 공격 팀의 GK는 0(왼쪽)에 있어야 함. 따라서 반전 필요.
-            needs_flip = gk_x > 0.5
-        else:
-            # GK 정보가 없으면 시퀀스의 전체적인 흐름(공격 방향)으로 판단
-            needs_flip = seq_df['start_x'].iloc[0] > seq_df['start_x'].iloc[-1]
-
-        if needs_flip:
+        if not gk_row.empty and gk_row['start_x'].iloc[0] > 0.5:
+            # R->L 공격이므로 반전하여 L->R로 만듦
             for col in ['start_x', 'end_x']: seq_df[col] = 1.0 - seq_df[col]
             for col in ['start_y', 'end_y']: seq_df[col] = 1.0 - seq_df[col]
+        elif gk_row.empty:
+            # GK 정보 부족 시 흐름 기반 (추천하지 않으나 폴백)
+            if seq_df['start_x'].iloc[0] > seq_df['start_x'].iloc[-1]:
+                for col in ['start_x', 'end_x']: seq_df[col] = 1.0 - seq_df[col]
+                for col in ['start_y', 'end_y']: seq_df[col] = 1.0 - seq_df[col]
 
         # 3. 리시브 로직 보정 (v3.1)
         # 리시브는 제자리로, 이동은 Carry로
@@ -238,7 +284,6 @@ def extract_sequences(df):
         refined_seq['outcome_result'] = orig_outcome['spadl_result']
         
         sequences.append(refined_seq)
-        used_action_ids.update(seq_df['action_id'].tolist())
         seq_id += 1
     
     if sequences:
