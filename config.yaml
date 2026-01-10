@@ -6,6 +6,11 @@ data:
 features:
   nb_prev_actions: 3
 
+# 시퀀스 추출 하이퍼파라미터
+sequence:
+  attack_len: 5      # 공격 시퀀스 길이 (성과 직전 1~5개)
+  buildup_len: 4     # 빌드업 시퀀스 길이 (6~9개)
+
 model:
   type: "CatBoostClassifier"
   n_estimators: 100               # Initial default
