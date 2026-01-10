@@ -5,7 +5,7 @@ data:
   spadl_output_dir: "data/spadl"
 
 features:
-  nb_prev_actions: 3
+  nb_prev_actions: 5
 
 # 시퀀스 추출 하이퍼파라미터
 sequence:
@@ -14,9 +14,9 @@ sequence:
 
 model:
   type: "CatBoostClassifier"
-  n_estimators: 100               # Initial default
-  learning_rate: 0.1              # Initial default
-  max_depth: 5                    # Initial default
+  n_estimators: 291
+  learning_rate: 0.02841883704284248
+  max_depth: 8
   cat_features: []                # To be filled if categorical types are used directly
 
 optimization:
