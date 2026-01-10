@@ -175,46 +175,51 @@ def extract_player_events(seq_df):
     return player_events
 
 # =========================================================
-# 선수 위치 보간 (v3.9: 간소화)
+# 선수 위치 보간 (v3.9: 중복 이동 방지)
 # =========================================================
 def get_player_position(player_id, player_events, current_event_idx, progress):
-    if player_id not in player_events: return FIELD_LENGTH / 2, FIELD_WIDTH / 2, False
+    """
+    선수의 현재 위치를 계산합니다.
+    - current_event_idx: 현재 진행 중인 이벤트 인덱스
+    - progress: 현재 이벤트 내에서의 진행도 (0.0 ~ 1.0)
+    """
+    if player_id not in player_events: 
+        return FIELD_LENGTH / 2, FIELD_WIDTH / 2, False
     
     events = player_events[player_id]
     event_indices = [e['event_idx'] for e in events]
     
-    # 1. 이벤트 수행 중
+    # 1. 현재 이벤트에 선수가 참여 중
     if current_event_idx in event_indices:
         event = next(e for e in events if e['event_idx'] == current_event_idx)
+        
         if event['category'] == 'carry':
-            # 드리블 시에는 부드럽게 이동
+            # 드리블/캐리: 시작 위치에서 종료 위치로 부드럽게 이동
             x = event['start_x'] + (event['end_x'] - event['start_x']) * progress
             y = event['start_y'] + (event['end_y'] - event['start_y']) * progress
         else:
-            # 패스 등은 제자리
+            # 패스/슛 등: 시작 위치에 고정 (공만 이동)
             x, y = event['start_x'], event['start_y']
-        return x, y, True
+        
+        return x, y, True  # active=True
     
-    # 2. 이동 중 또는 대기 중
-    future_events = [e for e in events if e['event_idx'] > current_event_idx]
+    # 2. 현재 이벤트에 선수가 참여하지 않음
+    # 가장 최근에 참여한 이벤트의 종료 위치에 머물러 있음
     past_events = [e for e in events if e['event_idx'] < current_event_idx]
     
-    if future_events:
-        next_event = future_events[0]
-        if past_events:
-            # 이전 이벤트의 실제 '종료 위치'에서 다음 이벤트의 '시작 위치'로 이동
-            prev_event = past_events[-1]
-            # progress 기반 보간
-            x = prev_event['end_x'] + (next_event['start_x'] - prev_event['end_x']) * progress
-            y = prev_event['end_y'] + (next_event['start_y'] - prev_event['end_y']) * progress
-        else:
-            # 첫 이벤트 전
-            x, y = next_event['start_x'], next_event['start_y']
-        return x, y, False
-    elif past_events:
-        # 마지막 이벤트 후
-        return past_events[-1]['end_x'], past_events[-1]['end_y'], False
+    if past_events:
+        # 마지막으로 참여한 이벤트의 종료 위치
+        last_event = past_events[-1]
+        return last_event['end_x'], last_event['end_y'], False
     
+    # 3. 아직 첫 이벤트 전
+    future_events = [e for e in events if e['event_idx'] > current_event_idx]
+    if future_events:
+        # 첫 이벤트의 시작 위치에서 대기
+        first_event = future_events[0]
+        return first_event['start_x'], first_event['start_y'], False
+    
+    # 4. 이벤트가 없는 선수 (중앙에 배치)
     return FIELD_LENGTH / 2, FIELD_WIDTH / 2, False
 
 # =========================================================
@@ -409,16 +414,48 @@ def create_event_based_animation(seq_df, sequence_id, output_path, title="전술
             
         return [ball_path_line, ball_circ, ball_pattern, event_label] + [m['circle'] for m in player_markers.values()]
     
-    anim = FuncAnimation(fig, animate, frames=total_frames, interval=int(FRAME_DURATION * 1000), blit=False)
-    
-    # MP4/GIF 저장 (FFMpegWriter 시 시도)
+    # MP4 저장 (imageio 사용)
     try:
-        from matplotlib.animation import FFMpegWriter
-        writer = FFMpegWriter(fps=FPS)
-        anim.save(output_path, writer=writer, dpi=100)
-    except:
+        import imageio
+        # 프레임 캡처
+        frames = []
+        print(f"    프레임 생성 중... (총 {total_frames}프레임)")
+        
+        for i in range(total_frames):
+            # artists 업데이트
+            artists = animate(i)
+            
+            # 강제 렌더링 - 모든 artist를 비애니메이션 모드로 전환
+            if artists:
+                for artist in artists:
+                    if artist is not None and hasattr(artist, 'set_animated'):
+                        artist.set_animated(False)
+            
+            # 캔버스 렌더링
+            fig.canvas.draw()
+            fig.canvas.flush_events()
+            
+            # 프레임 캡처
+            buf = fig.canvas.buffer_rgba()
+            frame = np.asarray(buf)
+            frames.append(frame[:, :, :3])  # RGB만 사용 (알파 채널 제거)
+            
+            if (i + 1) % 50 == 0:
+                print(f"      진행: {i+1}/{total_frames} ({100*(i+1)/total_frames:.1f}%)")
+        
+        # MP4로 저장
+        print(f"    MP4 인코딩 중...")
+        imageio.mimsave(output_path, frames, fps=FPS, codec='libx264', quality=8)
+        print(f"    ✓ MP4 저장 완료: {output_path}")
+    except Exception as e:
+        print(f"    ✗ MP4 저장 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        # GIF로 폴백
         output_path = output_path.replace('.mp4', '.gif')
-        anim.save(output_path, writer=PillowWriter(fps=5), dpi=80)
+        anim = FuncAnimation(fig, animate, frames=total_frames, interval=int(FRAME_DURATION * 1000), blit=False)
+        anim.save(output_path, writer=PillowWriter(fps=10), dpi=100)
+        print(f"    ✓ GIF 저장 완료: {output_path}")
     
     plt.close(fig)
     return output_path
