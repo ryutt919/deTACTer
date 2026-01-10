@@ -232,76 +232,92 @@ def build_player_timeline(filtered_seq, events):
     
     return player_timeline
 
-def get_player_position_v4(player_id, player_timeline, current_event_idx, progress):
+def get_player_position_v4_1(player_id, player_timeline, current_frame, frame_info):
     """
-    v4.0: 액션 인덱스 기반 선수 위치 계산
+    v4.1: 글로벌 프레임 기반 선수 위치 계산
     
-    - current_event_idx: 현재 진행 중인 이벤트 인덱스 (전체 시퀀스 기준)
-    - progress: 현재 이벤트 내에서의 진행도 (0.0 ~ 1.0)
-    
-    반환: (x, y, is_active)
+    - current_frame: 현재 절대 프레임 번호
+    - frame_info: 이벤트별 프레임 범위 정보 (start_frame, end_frame)
     """
-    if player_id not in player_timeline or len(player_timeline[player_id]) == 0:
+    if player_id not in player_timeline or not player_timeline[player_id]:
         return FIELD_LENGTH / 2, FIELD_WIDTH / 2, False
     
     timeline = player_timeline[player_id]
     
-    # Case 1: 현재 이벤트가 이 선수의 이벤트인 경우
+    # 1. 현재 수행 중인 이벤트 확인
     for entry in timeline:
-        if entry['event_idx'] == current_event_idx:
-            # 이 선수가 현재 이벤트를 수행 중
+        # 해당 이벤트의 프레임 범위 찾기
+        ev_info = frame_info[entry['event_idx']]
+        if ev_info['start_frame'] <= current_frame <= ev_info['end_frame']:
+            # 현재 이벤트 수행 중
+            progress = (current_frame - ev_info['start_frame']) / max(ev_info['num_frames'] - 1, 1)
+            
             if entry['category'] == 'carry':
                 # 드리블: 시작 -> 종료로 이동
                 x = entry['start_x'] + (entry['end_x'] - entry['start_x']) * progress
                 y = entry['start_y'] + (entry['end_y'] - entry['start_y']) * progress
             else:
-                # 패스/슛: 시작 위치에 고정
-                x = entry['start_x']
-                y = entry['start_y']
-            return x, y, True
-    
-    # Case 2: 현재 이벤트가 이 선수의 이벤트가 아닌 경우
-    # 가장 최근에 수행한 이벤트의 종료 위치를 찾음
-    past_events = [e for e in timeline if e['event_idx'] < current_event_idx]
-    future_events = [e for e in timeline if e['event_idx'] > current_event_idx]
-    
-    if past_events:
-        # 마지막으로 수행한 이벤트
-        last_ev = past_events[-1]
-        
-        # 마지막 이벤트가 패스였다면 start 위치에 고정되어야 함 (공만 이동했으므로)
-        # 마지막 이벤트가 드리블이었다면 end 위치에 있음
-        if last_ev['category'] == 'carry':
-            last_x, last_y = last_ev['end_x'], last_ev['end_y']
-        else:
-            # 패스 후에는 제자리 (start 위치)
-            last_x, last_y = last_ev['start_x'], last_ev['start_y']
-        
-        if future_events:
-            # 다음 이벤트까지 이동해야 함
-            next_ev = future_events[0]
-            next_x, next_y = next_ev['start_x'], next_ev['start_y']
+                # 패스/슛: 시작 위치 고정 (사용자 요청: 패스 시 움직이지 않음)
+                x, y = entry['start_x'], entry['start_y']
             
-            # 이동이 필요한지 확인 (좌표 차이가 0.01 이상인 경우)
-            if abs(last_x - next_x) > 0.01 or abs(last_y - next_y) > 0.01:
-                # 이동 중: 보간
-                x = last_x + (next_x - last_x) * progress
-                y = last_y + (next_y - last_y) * progress
-            else:
-                # 이동 불필요
-                x, y = last_x, last_y
-        else:
-            # 더 이상 이벤트 없음
-            x, y = last_x, last_y
+            return x, y, True
+            
+    # 2. 이벤트 사이 이동 (공백 구간)
+    # 현재 프레임보다 이전에 끝난 마지막 이벤트와, 이후에 시작할 첫 이벤트를 찾음
+    last_event = None
+    next_event = None
+    
+    for entry in timeline:
+        ev_info = frame_info[entry['event_idx']]
+        if ev_info['end_frame'] < current_frame:
+            last_event = entry
+        elif ev_info['start_frame'] > current_frame:
+            next_event = entry
+            break # 첫 번째 미래 이벤트 발견 시 중단
+    
+    if last_event and next_event:
+        # 두 이벤트 사이의 글로벌 이동
+        last_ev_info = frame_info[last_event['event_idx']]
+        next_ev_info = frame_info[next_event['event_idx']]
         
+        # 이동 구간: (이전 이벤트 종료) ~ (다음 이벤트 시작)
+        start_move_frame = last_ev_info['end_frame']
+        end_move_frame = next_ev_info['start_frame']
+        
+        # 시작 위치 계산 (이전 이벤트 타입에 따라)
+        if last_event['category'] == 'carry':
+            start_x, start_y = last_event['end_x'], last_event['end_y']
+        else:
+            # 패스 후에는 start 위치에 있었음
+            start_x, start_y = last_event['start_x'], last_event['start_y']
+            
+        # 목표 위치 (다음 이벤트 시작점)
+        target_x, target_y = next_event['start_x'], next_event['start_y']
+        
+        # 이동이 필요한지 확인
+        if abs(start_x - target_x) > 0.01 or abs(start_y - target_y) > 0.01:
+            # 글로벌 진행도 계산
+            total_move_frames = end_move_frame - start_move_frame
+            current_move_progress = (current_frame - start_move_frame) / max(total_move_frames, 1)
+            
+            x = start_x + (target_x - start_x) * current_move_progress
+            y = start_y + (target_y - start_y) * current_move_progress
+        else:
+            x, y = start_x, start_y
+            
         return x, y, False
-    
-    elif future_events:
-        # 아직 첫 이벤트 전: 첫 이벤트 시작 위치에서 대기
-        first_ev = future_events[0]
-        return first_ev['start_x'], first_ev['start_y'], False
-    
-    # 이벤트 없음
+
+    elif last_event:
+        # 더 이상 이벤트 없음 -> 마지막 위치 유지
+        if last_event['category'] == 'carry':
+            return last_event['end_x'], last_event['end_y'], False
+        else:
+            return last_event['start_x'], last_event['start_y'], False
+            
+    elif next_event:
+        # 아직 첫 이벤트 전 -> 첫 이벤트 시작 위치 대기
+        return next_event['start_x'], next_event['start_y'], False
+        
     return FIELD_LENGTH / 2, FIELD_WIDTH / 2, False
 
 # =========================================================
@@ -439,7 +455,7 @@ def create_animation_v4(seq_df, sequence_id, output_path, title="전술 패턴")
             
             # 선수 마커
             for pid, timeline in player_timeline.items():
-                px, py, active = get_player_position_v4(pid, player_timeline, current_event_idx, local_progress)
+                px, py, active = get_player_position_v4_1(pid, player_timeline, frame_idx, frame_info)
                 
                 # 팀 색상 결정
                 is_att = any(e['is_attacking'] for e in events if e['player_id'] == pid)
@@ -461,7 +477,7 @@ def create_animation_v4(seq_df, sequence_id, output_path, title="전술 패턴")
             
             # 공 위치
             if curr_ev['category'] == 'carry':
-                px, py, _ = get_player_position_v4(curr_ev['player_id'], player_timeline, current_event_idx, local_progress)
+                px, py, _ = get_player_position_v4_1(curr_ev['player_id'], player_timeline, frame_idx, frame_info)
                 bx, by = px + 1.2, py
             else:
                 bx = curr_ev['start_x'] + (curr_ev['end_x'] - curr_ev['start_x']) * local_progress

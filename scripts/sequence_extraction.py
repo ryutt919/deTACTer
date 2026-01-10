@@ -187,9 +187,45 @@ def extract_sequences(df):
         
         # [v3.6] 의미 있는 전술 패턴 확보를 위해 최소 3개의 패스(순수 Pass만, Cross 제외)가 포함되어야 함
         # - 단순 롱볼 한 번이나 드리블 후 슛 같은 단발성 패턴은 제외
+        # [v3.6] 의미 있는 전술 패턴 확보를 위해 최소 3개의 패스(순수 Pass만, Cross 제외)가 포함되어야 함
+        # - 단순 롱볼 한 번이나 드리블 후 슛 같은 단발성 패턴은 제외
         pass_count = (seq_df['type_name'] == 'Pass').sum()
         if pass_count < 3:
             continue
+        
+        # [v4.1] 빌드업 구역 필터링 (패널티 박스 내부 시작 시퀀스 제거)
+        # 성과 이벤트 자체는 박스 안일 수 있으나, 빌드업 과정이 이미 박스 안에서 시작되면 혼전 상황으로 간주
+        buildup_events = seq_df[seq_df['is_outcome'] == False]
+        if len(buildup_events) > 0:
+            # 패널티 박스 조건 (L->R 기준 정규화 전 좌표 사용 시 주의 필요. 여기서는 정규화 전이므로 원본 좌표 사용)
+            # v3.9 로직에서 방향 정규화는 나중에 함. 따라서 GK 위치 기반으로 조건 분기 필요.
+            
+            # 현재 시퀀스의 공격 방향 확인 (GK 위치 기반)
+            gk_row = gk_stats[(gk_stats['game_id'] == seq_df['game_id'].iloc[0]) & 
+                              (gk_stats['period_id'] == seq_df['period_id'].iloc[0]) & 
+                              (gk_stats['team_id'] == current_team)]
+            
+            is_l_to_r = True # 기본값
+            if not gk_row.empty and gk_row['start_x'].iloc[0] > 0.5:
+                is_l_to_r = False # R->L
+            
+            # 박스 내부 여부 확인
+            box_x_limit = PENALTY_BOX_X # 0.84
+            
+            if is_l_to_r:
+                in_box_condition = (buildup_events['start_x'] > box_x_limit) & \
+                                   (buildup_events['start_y'] > PENALTY_BOX_Y_MIN) & \
+                                   (buildup_events['start_y'] < PENALTY_BOX_Y_MAX)
+            else:
+                in_box_condition = (buildup_events['start_x'] < (1.0 - box_x_limit)) & \
+                                   (buildup_events['start_y'] > PENALTY_BOX_Y_MIN) & \
+                                   (buildup_events['start_y'] < PENALTY_BOX_Y_MAX)
+                                   
+            # 빌드업 중 하나라도 박스 안에서 시작되면 제거 (엄격한 기준) -> 사용자 의도는 '시작 좌표들이' 이므로
+            # 여기서는 "모든 빌드업 이벤트가 박스 안인가?" 보다는 "빌드업 시작점(첫 이벤트)이 박스 안인가?"가 더 적절할 수 있으나
+            # 사용자 요청: "시퀀스의 이벤트들의 시작 좌표가 패널티 박스 안에 있으면 안돼" -> 하나라도 있으면 안된다는 의미로 해석하여 엄격 적용
+            if in_box_condition.any():
+                continue
         
         # 사용된 액션 등록
         used_action_ids.update(seq_df['action_id'].tolist())
