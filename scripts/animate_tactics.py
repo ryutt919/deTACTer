@@ -53,9 +53,9 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 FIELD_LENGTH = 105
 FIELD_WIDTH = 68
 
-# 애니메이션 설정
-FRAME_INTERVAL = 300  # 밀리초 (프레임 간 간격)
-TRANSITION_FRAMES = 10  # 이벤트 간 보간 프레임 수
+# 애니메이션 설정 (v3.9: 실시간 타이밍 + 높은 FPS)
+FPS = 30  # 초당 프레임 수 (부드러운 애니메이션)
+FRAME_DURATION = 1.0 / FPS  # 각 프레임의 실제 시간 (초)
 
 # 시각적 요소 크기 (미터 단위)
 PLAYER_RADIUS = 1.5  # 선수 원 반경 (사용자 요청: 1.5m)
@@ -175,7 +175,7 @@ def extract_player_events(seq_df):
     return player_events
 
 # =========================================================
-# 선수 위치 보간 (점프 현상 수정)
+# 선수 위치 보간 (v3.9: 간소화)
 # =========================================================
 def get_player_position(player_id, player_events, current_event_idx, progress):
     if player_id not in player_events: return FIELD_LENGTH / 2, FIELD_WIDTH / 2, False
@@ -204,14 +204,9 @@ def get_player_position(player_id, player_events, current_event_idx, progress):
         if past_events:
             # 이전 이벤트의 실제 '종료 위치'에서 다음 이벤트의 '시작 위치'로 이동
             prev_event = past_events[-1]
-            
-            # 전역 프레임 인덱스 기준 정규화
-            total_gap_frames = (next_event['event_idx'] - prev_event['event_idx']) * TRANSITION_FRAMES
-            current_gap_frame = (current_event_idx - prev_event['event_idx']) * TRANSITION_FRAMES + (progress * TRANSITION_FRAMES)
-            
-            inter_p = min(max(current_gap_frame / total_gap_frames, 0), 1.0)
-            x = prev_event['end_x'] + (next_event['start_x'] - prev_event['end_x']) * inter_p
-            y = prev_event['end_y'] + (next_event['start_y'] - prev_event['end_y']) * inter_p
+            # progress 기반 보간
+            x = prev_event['end_x'] + (next_event['start_x'] - prev_event['end_x']) * progress
+            y = prev_event['end_y'] + (next_event['start_y'] - prev_event['end_y']) * progress
         else:
             # 첫 이벤트 전
             x, y = next_event['start_x'], next_event['start_y']
@@ -266,6 +261,8 @@ def create_event_based_animation(seq_df, sequence_id, output_path, title="전술
             # 병합: 이전 이벤트의 종료 좌표를 현재의 종료 좌표로 업데이트 (연속 동작)
             last['end_x'] = row['end_x']
             last['end_y'] = row['end_y']
+            # time_seconds도 업데이트 (v3.9)
+            last['time_seconds'] = row['time_seconds']
             # is_outcome 플래그 보존
             if row['is_outcome']: last['is_outcome'] = True
         else:
@@ -281,8 +278,12 @@ def create_event_based_animation(seq_df, sequence_id, output_path, title="전술
     
     player_events = extract_player_events(filtered_seq)
     
+    # [v3.9] 실시간 타이밍 계산
     events = []
     attacking_team_id = filtered_seq['team_id'].iloc[-1] # 마지막 성과를 낸 팀이 공격팀
+    
+    # 시작 시간 기준 설정
+    start_time = filtered_seq['time_seconds'].iloc[0]
     
     for idx, row in filtered_seq.iterrows():
         is_attacking = row['team_id'] == attacking_team_id
@@ -299,7 +300,8 @@ def create_event_based_animation(seq_df, sequence_id, output_path, title="전술
             'color': get_event_color(row['type_name'], row.get('spadl_type', '')),
             'team_color': TEAM_COLORS['attacking'] if is_attacking else TEAM_COLORS['defending'],
             'player_name': row.get('player_name_ko', '')[:6] if pd.notna(row.get('player_name_ko', '')) else '',
-            'team_name': row.get('team_name_ko', 'Unknown')
+            'team_name': row.get('team_name_ko', 'Unknown'),
+            'time_seconds': row['time_seconds'] - start_time  # 상대 시간
         })
     
     fig, ax = plt.subplots(figsize=(14, 9))
@@ -338,19 +340,44 @@ def create_event_based_animation(seq_df, sequence_id, output_path, title="전술
     event_label = ax.text(FIELD_LENGTH/2, FIELD_WIDTH+3, '', ha='center', fontsize=11, color='white', fontweight='bold', zorder=10,
                          bbox=dict(boxstyle='round,pad=0.5', facecolor='#333', alpha=0.9))
     
-    total_frames = len(events) * TRANSITION_FRAMES + 10
+    # [v3.9] 실시간 타이밍 기반 프레임 계산
+    # 전체 시퀀스 지속 시간 계산
+    total_duration = events[-1]['time_seconds'] + 1.0  # 마지막 이벤트 후 1초 추가
+    total_frames = int(total_duration * FPS)
+    
     event_markers = []
 
     def animate(frame):
         nonlocal ball_path_x, ball_path_y
-        idx = min(frame // TRANSITION_FRAMES, len(events) - 1)
-        prog = (frame % TRANSITION_FRAMES) / TRANSITION_FRAMES
         
-        curr_ev = events[idx]
+        # 현재 프레임의 실제 시간 계산
+        current_time = frame * FRAME_DURATION
+        
+        # 현재 시간에 해당하는 이벤트 찾기
+        curr_idx = 0
+        for i, ev in enumerate(events):
+            if ev['time_seconds'] <= current_time:
+                curr_idx = i
+            else:
+                break
+        
+        curr_ev = events[curr_idx]
+        
+        # 다음 이벤트가 있으면 보간 진행도 계산
+        if curr_idx < len(events) - 1:
+            next_ev = events[curr_idx + 1]
+            event_duration = next_ev['time_seconds'] - curr_ev['time_seconds']
+            if event_duration > 0:
+                prog = (current_time - curr_ev['time_seconds']) / event_duration
+                prog = min(max(prog, 0.0), 1.0)
+            else:
+                prog = 1.0
+        else:
+            prog = 1.0
         
         # 선수 위치
         for pid, mks in player_markers.items():
-            px, py, active = get_player_position(pid, player_events, idx, prog)
+            px, py, active = get_player_position(pid, player_events, curr_idx, prog)
             mks['circle'].center = (px, py)
             mks['label'].set_position((px, py - PLAYER_RADIUS - 0.8))
             mks['circle'].set_linewidth(3 if active else 1.5)
@@ -359,7 +386,7 @@ def create_event_based_animation(seq_df, sequence_id, output_path, title="전술
         # 공 위치
         if curr_ev['category'] == 'carry':
             # 드리블 시 선수 위치 추적
-            px, py, _ = get_player_position(curr_ev['player_id'], player_events, idx, prog)
+            px, py, _ = get_player_position(curr_ev['player_id'], player_events, curr_idx, prog)
             bx, by = px + 1.2, py
         else:
             bx = curr_ev['start_x'] + (curr_ev['end_x'] - curr_ev['start_x']) * prog
@@ -375,20 +402,20 @@ def create_event_based_animation(seq_df, sequence_id, output_path, title="전술
         event_label.set_text(f"[{curr_ev['team_name']}] {curr_ev['player_name']}: {curr_ev['type_name']}")
         event_label.set_color(curr_ev['color'])
         
-        if prog >= 0.9 and len(event_markers) <= idx:
+        if prog >= 0.9 and len(event_markers) <= curr_idx:
             # 과거 이벤트 지점 마커 조정 (사용자 요청: 노란색, 투명도 0.6)
             m = ax.scatter([curr_ev['end_x']], [curr_ev['end_y']], color='yellow', s=40, alpha=0.6, edgecolor='none')
             event_markers.append(m)
             
         return [ball_path_line, ball_circ, ball_pattern, event_label] + [m['circle'] for m in player_markers.values()]
     
-    anim = FuncAnimation(fig, animate, frames=total_frames, interval=FRAME_INTERVAL//2, blit=False)
+    anim = FuncAnimation(fig, animate, frames=total_frames, interval=int(FRAME_DURATION * 1000), blit=False)
     
     # MP4/GIF 저장 (FFMpegWriter 시 시도)
     try:
         from matplotlib.animation import FFMpegWriter
-        writer = FFMpegWriter(fps=10)
-        anim.save(output_path, writer=writer, dpi=80)
+        writer = FFMpegWriter(fps=FPS)
+        anim.save(output_path, writer=writer, dpi=100)
     except:
         output_path = output_path.replace('.mp4', '.gif')
         anim.save(output_path, writer=PillowWriter(fps=5), dpi=80)
