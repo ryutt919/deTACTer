@@ -1,0 +1,37 @@
+=== Data Quality Check Summary ===
+
+Total Rows: 579306
+Total Columns: 18
+
+--- Missing Values ---
+player_id              1
+result_name       349604
+player_name_ko         1
+position_name      70120
+main_position       1704
+
+--- Data Types ---
+game_id             int64
+action_id           int64
+period_id           int64
+time_seconds      float64
+team_id             int64
+player_id         float64
+result_name        object
+start_x           float64
+start_y           float64
+end_x             float64
+end_y             float64
+dx                float64
+dy                float64
+type_name          object
+player_name_ko     object
+team_name_ko       object
+position_name      object
+main_position      object
+
+--- Unique Values (Categorical) ---
+type_name: 37 unique values
+result_name: 11 unique values
+position_name: 16 unique values
+main_position: 14 unique values
