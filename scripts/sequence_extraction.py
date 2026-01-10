@@ -114,27 +114,14 @@ def identify_outcome_events(df):
     # 일시적 성과 후보
     df['temp_outcome'] = (is_shot | is_in_box) & is_valid_action
     
-    # 3. 불응기(Refractory Period) 적용 - 최소 5개 액션 간격 (v3.5)
-    # 사용자 요청: "최소 5개의 이벤트 다음에 성과 이벤트로 지정 가능"
-    is_outcome = np.zeros(len(df), dtype=bool)
-    last_outcome_idx = {} # 팀/기간별 마지막 성과 인덱스 저장
-    
-    for i in range(len(df)):
-        if df.loc[i, 'temp_outcome']:
-            key = (df.loc[i, 'game_id'], df.loc[i, 'period_id'], df.loc[i, 'team_id'])
-            last_idx = last_outcome_idx.get(key, -999)
-            
-            # 이전 성과로부터 최소 5개 액션이 지났을 때만 새로운 성과로 인정
-            if i - last_idx > 5:
-                is_outcome[i] = True
-                last_outcome_idx[key] = i
-    
-    df['is_outcome'] = is_outcome
+    # 3. 불응기(Refractory Period) 제거 (v4.2)
+    # 패널티 박스 필터링(v4.1)이 강력하므로 강제적인 불응기 불필요 판단 (사용자 요청)
+    df['is_outcome'] = df['temp_outcome']
     
     # 임시 컬럼 제거
     df.drop(columns=['temp_outcome', 'gk_x', 'is_l_to_r'], inplace=True)
     
-    print(f"    -> 유니크 성과 이벤트: {df['is_outcome'].sum():,}개 (불응기 5회 적용)")
+    print(f"    -> 유니크 성과 이벤트: {df['is_outcome'].sum():,}개 (불응기 제거)")
     return df
 
 def extract_sequences(df):
@@ -166,16 +153,27 @@ def extract_sequences(df):
             continue
             
         seq_indices = []
-        for i in range(outcome_idx, outcome_idx - TOTAL_SEQ_LEN, -1):
+        # v4.2: 상대팀 데이터 제외하고 같은 팀 데이터만 수집
+        # 3배수 정도까지 역추적 (무한 루프 방지)
+        for i in range(outcome_idx, outcome_idx - TOTAL_SEQ_LEN * 3, -1):
             if i < 0: break
+            
             # 경기나 기간이 바뀌면 중단
             if df.loc[i, 'game_id'] != df.loc[outcome_idx, 'game_id'] or \
                df.loc[i, 'period_id'] != df.loc[outcome_idx, 'period_id']:
                 break
+            
             # 이미 다른 시퀀스에서 사용된 액션을 만나면 중단 (배타적 경계)
             if df.loc[i, 'action_id'] in used_action_ids:
                 break
-            seq_indices.append(i)
+                
+            # v4.2: 같은 팀일 때만 수집 (상대팀 태클 등은 건너뜀)
+            if df.loc[i, 'team_id'] == current_team:
+                seq_indices.append(i)
+                
+            # 원하는 길이만큼 모았으면 종료
+            if len(seq_indices) >= TOTAL_SEQ_LEN:
+                break
         
         if not seq_indices: continue
         seq_indices.reverse()
