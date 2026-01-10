@@ -55,8 +55,8 @@ TOTAL_SEQ_LEN = ATTACK_LEN + BUILDUP_LEN  # 총 9개
 # 패널티 박스 정의 (정규화 좌표 기준, L->R 공격 방향)
 # X > 0.84 (88.5m/105m), 0.2 < Y < 0.8
 PENALTY_BOX_X = 0.84
-PENALTY_BOX_Y_MIN = 0.2
-PENALTY_BOX_Y_MAX = 0.8
+PENALTY_BOX_Y_MIN = 0.36
+PENALTY_BOX_Y_MAX = 0.635
 
 # =========================================================
 # 1. 데이터 로드
@@ -113,6 +113,9 @@ def identify_outcome_events(df):
     
     # 일시적 성과 후보
     df['temp_outcome'] = (is_shot | is_in_box) & is_valid_action
+    
+    # [v4.4] 모든 성과 이벤트는 지정된 Y 범위 내에서 발생해야 함 (사용자 요청 반영)
+    df['temp_outcome'] = df['temp_outcome'] & (df['start_y'] > PENALTY_BOX_Y_MIN) & (df['start_y'] < PENALTY_BOX_Y_MAX)
     
     # 3. 불응기(Refractory Period) 제거 (v4.2)
     # 패널티 박스 필터링(v4.1)이 강력하므로 강제적인 불응기 불필요 판단 (사용자 요청)
@@ -171,6 +174,18 @@ def extract_sequences(df):
             if df.loc[i, 'team_id'] == current_team:
                 seq_indices.append(i)
                 
+                # [v4.3] 세트피스(Throw-in, Freekick, Corner)가 나오면 시퀀스의 시작점으로 간주하고 역추적 중단
+                # 시퀀스 중간에 세트피스가 끼어있으면 안 되기 때문 (인플레이 상황이 끊김)
+                row_type = df.loc[i, 'spadl_type']
+                # SPADL 표준 타입명 확인 필요. throw_in, freekick_crossed, freekick_short 등일 수 있음.
+                # 단순 포함 여부로 체크하거나 주요 키워드 확인
+                
+                # SPADL 세트피스 관련 타입: throw_in, freekick_crossed, freekick_short, corner_crossed, corner_short, goal_kick
+                is_setpiece = row_type in ['throw_in', 'corner_kick', 'goal_kick'] or 'freekick' in row_type or 'corner' in row_type
+                
+                if is_setpiece:
+                    break
+                
             # 원하는 길이만큼 모았으면 종료
             if len(seq_indices) >= TOTAL_SEQ_LEN:
                 break
@@ -183,11 +198,11 @@ def extract_sequences(df):
         if len(seq_df) < 5:
             continue
         
-        # [v3.6] 의미 있는 전술 패턴 확보를 위해 최소 3개의 패스(순수 Pass만, Cross 제외)가 포함되어야 함
+        # [v4.4] 의미 있는 전술 패턴 확보를 위해 성과 이벤트를 제외한 나머지 액션들 중
+        # 최소 3개의 패스(순수 Pass만, Cross 제외)가 포함되어야 함
         # - 단순 롱볼 한 번이나 드리블 후 슛 같은 단발성 패턴은 제외
-        # [v3.6] 의미 있는 전술 패턴 확보를 위해 최소 3개의 패스(순수 Pass만, Cross 제외)가 포함되어야 함
-        # - 단순 롱볼 한 번이나 드리블 후 슛 같은 단발성 패턴은 제외
-        pass_count = (seq_df['type_name'] == 'Pass').sum()
+        non_outcome_events = seq_df[seq_df['is_outcome'] == False]
+        pass_count = (non_outcome_events['type_name'] == 'Pass').sum()
         if pass_count < 3:
             continue
         

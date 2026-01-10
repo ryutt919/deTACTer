@@ -1,6 +1,6 @@
 # =========================================================
 # animate_tactics.py
-# deTACTer 프로젝트용 전술 애니메이션 생성 모듈 (v4.0)
+# deTACTer 프로젝트용 전술 애니메이션 생성 모듈 (v4.4)
 # =========================================================
 # v4.0 주요 변경:
 # 1. PNG 시퀀스 + FFmpeg 기반 렌더링 (MP4 정지 문제 해결)
@@ -170,14 +170,16 @@ def calculate_frames(events):
     current_frame = 0
     
     for i, ev in enumerate(events):
-        # 현재 이벤트의 지속 시간 (다음 이벤트까지의 간격)
         if i < len(events) - 1:
             next_ev = events[i + 1]
             gap = next_ev['time_seconds'] - ev['time_seconds']
-            # 실제 시간 그대로 사용 (압축 없음)
         else:
-            # 마지막 이벤트: 1초 추가
-            gap = 1.0
+            # [v4.4] 마지막 이벤트가 성과(outcome) 패스인 경우, 공이 시작 위치에 오는 즉시 종료되도록 매우 짧게 설정
+            if ev.get('type_name') == 'Pass' and ev.get('is_outcome'):
+                gap = 0.05  # 약 1-2 프레임만 표시하고 종료
+            else:
+                # 일반적인 경우 마지막 장면을 1초간 유지
+                gap = 1.0
         
         # 이 구간의 프레임 수
         num_frames = int(gap * FPS)
@@ -401,6 +403,7 @@ def create_animation_v4(seq_df, sequence_id, output_path, title="전술 패턴")
             'end_x': row['end_x'] * FIELD_LENGTH if pd.notna(row['end_x']) else row['start_x'] * FIELD_LENGTH,
             'end_y': row['end_y'] * FIELD_WIDTH if pd.notna(row['end_y']) else row['start_y'] * FIELD_WIDTH,
             'type_name': row['type_name'],
+            'is_outcome': row.get('is_outcome', False),
             'category': get_event_category(row['type_name'], row.get('spadl_type', '')),
             'color': get_event_color(row['type_name'], row.get('spadl_type', '')),
             'team_color': TEAM_COLORS['attacking'] if is_attacking else TEAM_COLORS['defending'],
@@ -615,7 +618,7 @@ def create_cluster_animations(seq_df, cluster_df, cluster_col, n_clusters=5, n_s
 # =========================================================
 def main():
     print(f"============================================================")
-    print(f"deTACTer v4.0 애니메이션 생성")
+    print(f"deTACTer v4.4 애니메이션 생성")
     print(f"  버전: {VERSION}")
     print(f"  데이터: {DATA_DIR}")
     print(f"  출력: {OUTPUT_DIR}")
