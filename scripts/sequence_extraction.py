@@ -181,9 +181,9 @@ def extract_sequences(df):
         seq_indices.reverse()
         seq_df = df.loc[seq_indices].copy()
         
-        # [v3.6] 의미 있는 전술 패턴 확보를 위해 최소 3개의 패스(Pass/Cross 포함)가 포함되어야 함
+        # [v3.6] 의미 있는 전술 패턴 확보를 위해 최소 3개의 패스(순수 Pass만, Cross 제외)가 포함되어야 함
         # - 단순 롱볼 한 번이나 드리블 후 슛 같은 단발성 패턴은 제외
-        pass_count = seq_df['type_name'].str.contains('Pass|Cross', case=False, na=False).sum()
+        pass_count = (seq_df['type_name'] == 'Pass').sum()
         if pass_count < 3:
             continue
         
