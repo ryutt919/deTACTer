@@ -123,13 +123,18 @@ def extract_sequences(df):
     seq_id = 0
     
     for outcome_idx in outcome_indices:
-        # 1. 역추적 (중복 방지)
+        # 1. 역추적 (배타적 시퀀스 추출)
+        # 이미 다른 시퀀스(성과)에 포함된 액션이라면 이 성과는 별도의 시퀀스를 만들지 않음
+        if df.loc[outcome_idx, 'action_id'] in used_action_ids:
+            continue
+            
         seq_indices = []
         for i in range(outcome_idx, outcome_idx - TOTAL_SEQ_LEN, -1):
             if i < 0: break
             if df.loc[i, 'game_id'] != df.loc[outcome_idx, 'game_id'] or \
                df.loc[i, 'period_id'] != df.loc[outcome_idx, 'period_id']:
                 break
+            # 역추적 중 다른 시퀀스에 쓰인 액션을 만나면 중단 (공격 흐름의 경계)
             if df.loc[i, 'action_id'] in used_action_ids:
                 break
             seq_indices.append(i)
@@ -138,21 +143,31 @@ def extract_sequences(df):
         seq_indices.reverse()
         seq_df = df.loc[seq_indices].copy()
         
+        # 사용된 액션 ID 등록 (중복 방지 및 파편화 방지)
+        used_action_ids.update(seq_df['action_id'].tolist())
+        
         attacking_team = seq_df['team_id'].iloc[-1]
         
-        # 2. 공격 방향 통일 (시퀀스 레벨)
-        # GK 위치를 찾아 공격 방향 판단 (L->R로 통일)
-        gk_x = df[(df['game_id'] == seq_df['game_id'].iloc[0]) & 
-                  (df['team_id'] == attacking_team) & 
-                  ((df['position_name'] == 'GK') | (df['main_position'] == 'GK'))]['start_x'].mean()
+        # 2. 공격 방향 통일 (시퀀스 레벨 - GK 위치 기준)
+        # [v3.3 사용자 피드백] 공격 팀의 GK는 0에 가까워야 함.
+        # 해당 시퀀스 시점 전후로 공격 팀의 GK 위치를 찾아 방향 판단
+        gk_events = df[(df['game_id'] == seq_df['game_id'].iloc[0]) & 
+                      (df['team_id'] == attacking_team) & 
+                      ((df['position_name'] == 'GK') | (df['main_position'] == 'GK'))]
         
-        # GK가 오른쪽에 있으면 자팀 골대가 오른쪽 -> 반전 필요
-        needs_flip = gk_x > 0.5
+        if not gk_events.empty:
+            # 슛 또는 성과 이벤트 시점과 가까운 GK 위치 참조
+            gk_x = gk_events['start_x'].mean()
+            # GK가 0.5보다 오른쪽에 있으면 공격 팀의 GK가 오른쪽에 있는 것임.
+            # 사용자 요청: 공격 팀의 GK는 0(왼쪽)에 있어야 함. 따라서 반전 필요.
+            needs_flip = gk_x > 0.5
+        else:
+            # GK 정보가 없으면 시퀀스의 전체적인 흐름(공격 방향)으로 판단
+            needs_flip = seq_df['start_x'].iloc[0] > seq_df['start_x'].iloc[-1]
+
         if needs_flip:
             for col in ['start_x', 'end_x']: seq_df[col] = 1.0 - seq_df[col]
             for col in ['start_y', 'end_y']: seq_df[col] = 1.0 - seq_df[col]
-            if 'dx' in seq_df.columns: seq_df['dx'] = -seq_df['dx']
-            if 'dy' in seq_df.columns: seq_df['dy'] = -seq_df['dy']
 
         # 3. 리시브 로직 보정 (v3.1)
         # 리시브는 제자리로, 이동은 Carry로

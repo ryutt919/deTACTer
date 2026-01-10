@@ -38,7 +38,7 @@ CONFIG_PATH = 'c:/Users/Public/Documents/DIK/deTACTer/config.yaml'
 with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
     config = yaml.safe_load(f)
 
-VERSION = config.get('version', 'v3.1')
+VERSION = config.get('version', 'v3.3')
 BASE_DIR = 'c:/Users/Public/Documents/DIK/deTACTer'
 
 # 입력 및 출력 경로 설정 (버전별 폴더)
@@ -77,7 +77,10 @@ EVENT_COLORS = {
     'default': '#7f8c8d'     # 기본 색상
 }
 
-TEAM_COLORS = ['#3498db', '#e74c3c']  # 팀 색상
+TEAM_COLORS = {
+    'attacking': '#3498db',  # 파랑 계열 (공격팀)
+    'defending': '#e74c3c'   # 빨강 계열 (수비팀)
+}
 
 # =========================================================
 # 축구장 그리기 (동일)
@@ -278,9 +281,14 @@ def create_event_based_animation(seq_df, sequence_id, output_path, title="전술
     player_events = extract_player_events(filtered_seq)
     
     events = []
+    attacking_team_id = filtered_seq['team_id'].iloc[-1] # 마지막 성과를 낸 팀이 공격팀
+    
     for idx, row in filtered_seq.iterrows():
+        is_attacking = row['team_id'] == attacking_team_id
         events.append({
             'player_id': row['player_id'],
+            'team_id': row['team_id'],
+            'is_attacking': is_attacking,
             'start_x': row['start_x'] * FIELD_LENGTH,
             'start_y': row['start_y'] * FIELD_WIDTH,
             'end_x': row['end_x'] * FIELD_LENGTH if pd.notna(row['end_x']) else row['start_x'] * FIELD_LENGTH,
@@ -288,6 +296,7 @@ def create_event_based_animation(seq_df, sequence_id, output_path, title="전술
             'type_name': row['type_name'],
             'category': get_event_category(row['type_name'], row.get('spadl_type', '')),
             'color': get_event_color(row['type_name'], row.get('spadl_type', '')),
+            'team_color': TEAM_COLORS['attacking'] if is_attacking else TEAM_COLORS['defending'],
             'player_name': row.get('player_name_ko', '')[:6] if pd.notna(row.get('player_name_ko', '')) else ''
         })
     
@@ -302,8 +311,17 @@ def create_event_based_animation(seq_df, sequence_id, output_path, title="전술
     ball_path_x, ball_path_y = [], []
     
     player_markers = {}
+    attacking_team_id = filtered_seq['team_id'].iloc[-1]
     for i, (pid, evs) in enumerate(player_events.items()):
-        color = TEAM_COLORS[i % 2]
+        # 해당 선수가 소속된 팀 판단
+        is_att = any(e['team_id'] == attacking_team_id for e in evs if 'team_id' in e) # 안전장치
+        # 만약 evs에 team_id가 없으면 filtered_seq에서 찾음
+        if not any('team_id' in e for e in evs):
+            player_row = filtered_seq[filtered_seq['player_id'] == pid].iloc[0]
+            is_att = player_row['team_id'] == attacking_team_id
+            
+        color = TEAM_COLORS['attacking'] if is_att else TEAM_COLORS['defending']
+        
         circ = plt.Circle((evs[0]['start_x'], evs[0]['start_y']), PLAYER_RADIUS, facecolor=color, edgecolor='white', linewidth=1.5, zorder=5)
         ax.add_patch(circ)
         lbl = ax.text(0, 0, evs[0]['player_name'], ha='center', fontsize=7, color='white', zorder=6,
@@ -398,16 +416,23 @@ def plot_sequence_static(seq_df, sequence_id, output_path, title="전술 패턴"
     fig, ax = plt.subplots(figsize=(14, 9)); fig.patch.set_facecolor('#1a1a2e')
     draw_pitch_real_scale(ax)
     ax.set_title(title, fontsize=16, fontweight='bold', color='white', pad=15)
+    attacking_team_id = seq['team_id'].iloc[-1]
     px, py = None, None
     for i, row in seq.iterrows():
         x, y = row['start_x']*105, row['start_y']*68
         ex, ey = (row['end_x']*105 if pd.notna(row['end_x']) else x), (row['end_y']*68 if pd.notna(row['end_y']) else y)
+        
+        # 팀 색상 적용
+        is_att = row['team_id'] == attacking_team_id
+        t_color = TEAM_COLORS['attacking'] if is_att else TEAM_COLORS['defending']
+        
         c = get_event_color(row['type_name'])
         if px is not None: ax.plot([px, x], [py, y], '-', color='yellow', alpha=0.3)
         if get_event_category(row['type_name']) == 'pass':
             ax.add_patch(FancyArrowPatch((x,y), (ex,ey), arrowstyle='fancy', color=c, alpha=0.6))
-        # 정적 플롯 마커 수정 (노란색, 투명도 0.6)
-        ax.scatter([x], [y], color='yellow', s=100, alpha=0.6, edgecolor='white', linewidth=1) 
+        
+        # 정적 플롯 마커 수정 (팀 색상 적용)
+        ax.scatter([x], [y], color=t_color, s=100, alpha=0.7, edgecolor='white', linewidth=1) 
         ax.annotate(f"{i+1}. {row['type_name']}", (x,y), color='white', fontsize=8)
         px, py = ex, ey
     plt.savefig(output_path, dpi=100, bbox_inches='tight', facecolor='#1a1a2e')
