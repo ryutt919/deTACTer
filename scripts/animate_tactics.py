@@ -1,9 +1,9 @@
 # =========================================================
 # animate_tactics.py
-# deTACTer 프로젝트용 전술 애니메이션 생성 모듈
+# deTACTer 프로젝트용 전술 애니메이션 생성 모듈 (v2.0)
 # =========================================================
 # 실제 경기장 규격 (105m x 68m)에 맞춘 애니메이션 생성
-# 이벤트 타입별 애니메이션: Carry(선수+공 이동), Pass(공만 이동)
+# 모든 선수 추적 + 이벤트 타입별 애니메이션
 # 출력: GIF/MP4 파일
 # =========================================================
 
@@ -41,7 +41,12 @@ FIELD_WIDTH = 68
 
 # 애니메이션 설정
 FRAME_INTERVAL = 300  # 밀리초 (프레임 간 간격)
-TRANSITION_FRAMES = 8  # 이벤트 간 보간 프레임 수
+TRANSITION_FRAMES = 10  # 이벤트 간 보간 프레임 수
+
+# 시각적 요소 크기 (미터 단위)
+PLAYER_RADIUS = 1.2  # 선수 원 반경
+PLAYER_GLOW_RADIUS = 2.0  # 활성 선수 글로우 반경
+BALL_RADIUS = 0.75  # 공 반경 (직경 1.5m)
 
 # =========================================================
 # 색상 팔레트 (이벤트 타입별)
@@ -57,8 +62,11 @@ EVENT_COLORS = {
     'pass': '#3498db',       # SPADL 패스
     'shot': '#e74c3c',       # SPADL 슛
     'cross': '#9b59b6',      # SPADL 크로스
+    'receive': '#1abc9c',    # 청록색 - 수신
     'default': '#7f8c8d'     # 기본 색상
 }
+
+TEAM_COLORS = ['#3498db', '#e74c3c']  # 팀 색상 (파란, 빨강)
 
 # =========================================================
 # 축구장 그리기 (실제 규격 + 잔디 패턴)
@@ -142,9 +150,9 @@ def draw_pitch_real_scale(ax, grass_stripes=True):
                             color=line_color, linewidth=2, zorder=1)
     ax.add_patch(arc_left)
     
-    # 골대 (7.32m 너비) - 두꺼운 라인으로 표현
+    # 골대 (7.32m 너비)
     goal_width = 7.32
-    goal_depth = 2.44  # 골대 깊이 표현
+    goal_depth = 2.44
     goal_y_start = (FIELD_WIDTH - goal_width) / 2
     goal_y_end = (FIELD_WIDTH + goal_width) / 2
     
@@ -156,31 +164,26 @@ def draw_pitch_real_scale(ax, grass_stripes=True):
     ax.plot([0, 0], [goal_y_start, goal_y_end], color='white', linewidth=5, zorder=2)
     
     # ===== 오른쪽 골대 영역 (공격) =====
-    # 패널티 박스
     ax.add_patch(patches.Rectangle(
         (FIELD_LENGTH - penalty_box_width, (FIELD_WIDTH - penalty_box_height) / 2), 
         penalty_box_width, penalty_box_height,
         fill=False, color=line_color, linewidth=2, zorder=1
     ))
     
-    # 골 에어리어
     ax.add_patch(patches.Rectangle(
         (FIELD_LENGTH - goal_area_width, (FIELD_WIDTH - goal_area_height) / 2), 
         goal_area_width, goal_area_height,
         fill=False, color=line_color, linewidth=2, zorder=1
     ))
     
-    # 페널티 스팟
     ax.add_patch(plt.Circle((FIELD_LENGTH - 11, FIELD_WIDTH/2), 0.25, 
                              fill=True, color=line_color, zorder=2))
     
-    # 페널티 아크
     arc_right = patches.Arc((FIELD_LENGTH - 11, FIELD_WIDTH/2), 18.3, 18.3, 
                              angle=0, theta1=128, theta2=232, 
                              color=line_color, linewidth=2, zorder=1)
     ax.add_patch(arc_right)
     
-    # 골대 (오른쪽)
     ax.add_patch(patches.Rectangle(
         (FIELD_LENGTH, goal_y_start), goal_depth, goal_width,
         facecolor='#555555', edgecolor='white', linewidth=3, alpha=0.3, zorder=1
@@ -190,16 +193,12 @@ def draw_pitch_real_scale(ax, grass_stripes=True):
     
     # 코너 아크 (반경 1m)
     corner_radius = 1
-    # 왼쪽 하단
     ax.add_patch(patches.Arc((0, 0), corner_radius*2, corner_radius*2, 
                               angle=0, theta1=0, theta2=90, color=line_color, linewidth=2, zorder=1))
-    # 왼쪽 상단
     ax.add_patch(patches.Arc((0, FIELD_WIDTH), corner_radius*2, corner_radius*2, 
                               angle=0, theta1=270, theta2=360, color=line_color, linewidth=2, zorder=1))
-    # 오른쪽 하단
     ax.add_patch(patches.Arc((FIELD_LENGTH, 0), corner_radius*2, corner_radius*2, 
                               angle=0, theta1=90, theta2=180, color=line_color, linewidth=2, zorder=1))
-    # 오른쪽 상단
     ax.add_patch(patches.Arc((FIELD_LENGTH, FIELD_WIDTH), corner_radius*2, corner_radius*2, 
                               angle=0, theta1=180, theta2=270, color=line_color, linewidth=2, zorder=1))
     
@@ -222,6 +221,7 @@ def get_event_category(type_name, spadl_type=None):
     Returns:
         'carry': 선수가 공과 함께 이동 (드리블/운반)
         'pass': 공만 이동 (패스/크로스/슛)
+        'receive': 공 받기 (수신)
         'other': 기타 이벤트
     """
     # Carry 계열 (선수 + 공 함께 이동)
@@ -233,10 +233,15 @@ def get_event_category(type_name, spadl_type=None):
                   'pass', 'cross', 'shot', 'shot_freekick', 'freekick_short', 
                   'throw_in', 'goalkick', 'corner_short']
     
+    # Receive 계열 (공 받기)
+    receive_types = ['Pass Received', 'Ball Received']
+    
     if type_name in carry_types or spadl_type in carry_types:
         return 'carry'
     elif type_name in pass_types or spadl_type in pass_types:
         return 'pass'
+    elif type_name in receive_types:
+        return 'receive'
     else:
         return 'other'
 
@@ -247,78 +252,210 @@ def get_event_color(type_name, spadl_type=None):
         return EVENT_COLORS[type_name]
     elif spadl_type and spadl_type in EVENT_COLORS:
         return EVENT_COLORS[spadl_type]
+    
+    # 카테고리별 기본 색상
+    category = get_event_category(type_name, spadl_type)
+    if category == 'receive':
+        return EVENT_COLORS['receive']
+    
     return EVENT_COLORS['default']
 
 
 # =========================================================
-# 선수 및 공 그리기 함수
+# 선수별 이벤트 추출
 # =========================================================
-def draw_player(ax, x, y, color='#3498db', size=12, number=None, name=None, is_active=False):
+def extract_player_events(seq_df):
     """
-    선수를 원형으로 그립니다.
+    시퀀스에서 각 선수의 이벤트를 추출하여 딕셔너리로 반환합니다.
     
     Args:
-        ax: matplotlib axes
-        x, y: 위치 좌표
-        color: 유니폼 색상
-        size: 선수 크기
-        number: 등번호 (선택)
-        name: 선수 이름 (선택)
-        is_active: 활성 선수 여부 (하이라이트)
+        seq_df: 단일 시퀀스의 데이터프레임 (이미 정렬됨)
+    
+    Returns:
+        player_events: {
+            player_id: [
+                {
+                    'event_idx': 이벤트 인덱스,
+                    'start_x': 시작 x,
+                    'start_y': 시작 y,
+                    'end_x': 종료 x,
+                    'end_y': 종료 y,
+                    'type_name': 이벤트 타입,
+                    'category': 이벤트 카테고리,
+                    'color': 색상,
+                    'player_name': 선수 이름
+                },
+                ...
+            ],
+            ...
+        }
     """
-    # 외곽 효과 (활성 선수일 때)
-    if is_active:
-        glow = plt.Circle((x, y), size * 0.18, color='yellow', alpha=0.5, zorder=4)
-        ax.add_patch(glow)
+    player_events = {}
     
-    # 선수 원
-    player = plt.Circle((x, y), size * 0.12, color=color, 
-                         edgecolor='white', linewidth=1.5, zorder=5)
-    ax.add_patch(player)
+    for idx, row in seq_df.iterrows():
+        player_id = row['player_id']
+        
+        if pd.isna(player_id):
+            continue
+        
+        if player_id not in player_events:
+            player_events[player_id] = []
+        
+        # 이벤트 정보 저장
+        event_info = {
+            'event_idx': idx,
+            'start_x': row['start_x'] * FIELD_LENGTH,
+            'start_y': row['start_y'] * FIELD_WIDTH,
+            'end_x': row['end_x'] * FIELD_LENGTH if pd.notna(row['end_x']) else row['start_x'] * FIELD_LENGTH,
+            'end_y': row['end_y'] * FIELD_WIDTH if pd.notna(row['end_y']) else row['start_y'] * FIELD_WIDTH,
+            'type_name': row['type_name'],
+            'category': get_event_category(row['type_name'], row.get('spadl_type', '')),
+            'color': get_event_color(row['type_name'], row.get('spadl_type', '')),
+            'player_name': row.get('player_name_ko', '')[:6] if pd.notna(row.get('player_name_ko', '')) else ''
+        }
+        
+        player_events[player_id].append(event_info)
     
-    # 등번호 표시 (선택)
-    if number is not None:
-        ax.text(x, y, str(number), ha='center', va='center', 
-                fontsize=7, fontweight='bold', color='white', zorder=6)
-    
-    # 선수 이름 표시 (선택)
-    if name is not None:
-        ax.text(x, y - size * 0.2, name, ha='center', va='top', 
-                fontsize=6, color='white', zorder=6)
-    
-    return player
-
-
-def draw_ball(ax, x, y, size=0.8):
-    """
-    축구공을 그립니다.
-    
-    Args:
-        ax: matplotlib axes
-        x, y: 위치 좌표
-        size: 공 크기
-    """
-    # 공 본체 (흰색 + 검정 패턴)
-    ball = plt.Circle((x, y), size, color='white', edgecolor='black', 
-                       linewidth=1.5, zorder=7)
-    ax.add_patch(ball)
-    
-    # 오각형 패턴 (간단한 표현)
-    pentagon = RegularPolygon((x, y), numVertices=5, radius=size * 0.5, 
-                               color='black', zorder=8)
-    ax.add_patch(pentagon)
-    
-    return ball
+    return player_events
 
 
 # =========================================================
-# 시퀀스 애니메이션 생성 (이벤트 기반)
+# 선수 위치 보간 함수
+# =========================================================
+def get_player_position(player_id, player_events, current_event_idx, progress):
+    """
+    현재 프레임에서 선수의 위치를 계산합니다.
+    
+    Args:
+        player_id: 선수 ID
+        player_events: 선수별 이벤트 딕셔너리
+        current_event_idx: 현재 이벤트 인덱스
+        progress: 현재 이벤트 내 진행률 (0~1)
+    
+    Returns:
+        (x, y, is_active): 위치 좌표 및 활성 여부
+    """
+    if player_id not in player_events or len(player_events[player_id]) == 0:
+        # 이벤트가 없는 선수는 초기 위치 반환
+        return FIELD_LENGTH / 2, FIELD_WIDTH / 2, False
+    
+    events = player_events[player_id]
+    event_indices = [e['event_idx'] for e in events]
+    
+    # 현재 이벤트가 이 선수의 이벤트인지 확인
+    if current_event_idx in event_indices:
+        # 이 선수가 현재 이벤트 수행 중
+        event = next(e for e in events if e['event_idx'] == current_event_idx)
+        
+        # Carry: start -> end 이동
+        # Pass: start 위치 고정 (공만 이동)
+        # Receive: end 위치로 이동
+        if event['category'] == 'carry':
+            x = event['start_x'] + (event['end_x'] - event['start_x']) * progress
+            y = event['start_y'] + (event['end_y'] - event['start_y']) * progress
+        elif event['category'] == 'pass':
+            # 패스할 때는 제자리
+            x, y = event['start_x'], event['start_y']
+        elif event['category'] == 'receive':
+            # 공 받을 때는 end 위치로 약간 이동
+            x = event['start_x'] + (event['end_x'] - event['start_x']) * progress
+            y = event['start_y'] + (event['end_y'] - event['start_y']) * progress
+        else:
+            x, y = event['start_x'], event['start_y']
+        
+        return x, y, True  # is_active=True
+    
+    # 이 선수의 다음 이벤트를 찾기
+    future_events = [e for e in events if e['event_idx'] > current_event_idx]
+    past_events = [e for e in events if e['event_idx'] < current_event_idx]
+    
+    if future_events:
+        # 다음 이벤트를 위해 이동 중
+        next_event = future_events[0]
+        
+        if past_events:
+            # 이전 이벤트의 끝 위치에서 다음 이벤트의 시작 위치로 보간
+            prev_event = past_events[-1]
+            
+            # 이벤트 간 프레임 수 계산
+            frames_between = (next_event['event_idx'] - prev_event['event_idx']) * TRANSITION_FRAMES
+            current_frame = (current_event_idx - prev_event['event_idx']) * TRANSITION_FRAMES + int(progress * TRANSITION_FRAMES)
+            
+            inter_progress = min(current_frame / frames_between, 1.0) if frames_between > 0 else 0
+            
+            x = prev_event['end_x'] + (next_event['start_x'] - prev_event['end_x']) * inter_progress
+            y = prev_event['end_y'] + (next_event['start_y'] - prev_event['end_y']) * inter_progress
+        else:
+            # 첫 이벤트 이전: 다음 이벤트의 시작 위치로 이동
+            x, y = next_event['start_x'], next_event['start_y']
+        
+        return x, y, False
+    
+    elif past_events:
+        # 마지막 이벤트 이후: 마지막 위치에서 대기
+        last_event = past_events[-1]
+        x, y = last_event['end_x'], last_event['end_y']
+        return x, y, False
+    
+    else:
+        # 이벤트가 없는 경우 (should not happen)
+        return FIELD_LENGTH / 2, FIELD_WIDTH / 2, False
+
+
+# =========================================================
+# 공 위치 계산 함수
+# =========================================================
+def get_ball_position(current_event, progress, player_events):
+    """
+    현재 프레임에서 공의 위치를 계산합니다.
+    
+    Args:
+        current_event: 현재 이벤트 정보
+        progress: 현재 이벤트 내 진행률 (0~1)
+        player_events: 선수별 이벤트 딕셔너리
+    
+    Returns:
+        (ball_x, ball_y): 공 위치 좌표
+    """
+    category = current_event['category']
+    
+    if category == 'carry':
+        # Carry: 선수와 함께 이동 (선수 위치 + offset)
+        player_id = current_event.get('player_id')
+        if player_id and player_id in player_events:
+            player_x = current_event['start_x'] + (current_event['end_x'] - current_event['start_x']) * progress
+            player_y = current_event['start_y'] + (current_event['end_y'] - current_event['start_y']) * progress
+            # 공은 선수 약간 앞에 위치
+            ball_x = player_x + 1.5
+            ball_y = player_y
+        else:
+            ball_x = current_event['start_x'] + (current_event['end_x'] - current_event['start_x']) * progress
+            ball_y = current_event['start_y'] + (current_event['end_y'] - current_event['start_y']) * progress
+    
+    elif category == 'pass':
+        # Pass: 공만 start -> end 이동
+        ball_x = current_event['start_x'] + (current_event['end_x'] - current_event['start_x']) * progress
+        ball_y = current_event['start_y'] + (current_event['end_y'] - current_event['start_y']) * progress
+    
+    elif category == 'receive':
+        # Receive: end 위치에 공 고정
+        ball_x = current_event['end_x']
+        ball_y = current_event['end_y']
+    
+    else:
+        # 기타: 기본 이동
+        ball_x = current_event['start_x'] + (current_event['end_x'] - current_event['start_x']) * progress
+        ball_y = current_event['start_y'] + (current_event['end_y'] - current_event['start_y']) * progress
+    
+    return ball_x, ball_y
+
+
+# =========================================================
+# 시퀀스 애니메이션 생성 (선수 추적 버전)
 # =========================================================
 def create_event_based_animation(seq_df, sequence_id, output_path, title="전술 패턴"):
     """
-    이벤트 타입에 따른 시퀀스 애니메이션을 생성합니다.
-    - Carry: 선수가 공과 함께 이동
-    - Pass: 공만 목표 지점으로 이동, 선수는 제자리
+    모든 선수를 추적하는 시퀀스 애니메이션을 생성합니다.
     
     Args:
         seq_df: 전체 시퀀스 데이터프레임
@@ -333,19 +470,30 @@ def create_event_based_animation(seq_df, sequence_id, output_path, title="전술
         print(f"    [경고] 시퀀스 {sequence_id}를 찾을 수 없습니다.")
         return None
     
-    # 정규화된 좌표를 실제 규격으로 변환
+    # 선수별 이벤트 추출
+    player_events = extract_player_events(seq)
+    
+    if len(player_events) == 0:
+        print(f"    [경고] 시퀀스 {sequence_id}에 선수 정보가 없습니다.")
+        return None
+    
+    # 팀 ID 추출 (첫 이벤트의 팀)
+    team_id = seq.iloc[0]['team_id'] if 'team_id' in seq.columns else None
+    
+    # 전체 이벤트 리스트 생성
     events = []
     for idx, row in seq.iterrows():
         event = {
+            'event_idx': idx,
+            'player_id': row['player_id'],
             'start_x': row['start_x'] * FIELD_LENGTH,
             'start_y': row['start_y'] * FIELD_WIDTH,
             'end_x': row['end_x'] * FIELD_LENGTH if pd.notna(row['end_x']) else row['start_x'] * FIELD_LENGTH,
             'end_y': row['end_y'] * FIELD_WIDTH if pd.notna(row['end_y']) else row['start_y'] * FIELD_WIDTH,
             'type_name': row['type_name'],
-            'spadl_type': row.get('spadl_type', ''),
-            'player_name': row.get('player_name_ko', ''),
             'category': get_event_category(row['type_name'], row.get('spadl_type', '')),
-            'color': get_event_color(row['type_name'], row.get('spadl_type', ''))
+            'color': get_event_color(row['type_name'], row.get('spadl_type', '')),
+            'player_name': row.get('player_name_ko', '')[:6] if pd.notna(row.get('player_name_ko', '')) else ''
         }
         events.append(event)
     
@@ -354,148 +502,155 @@ def create_event_based_animation(seq_df, sequence_id, output_path, title="전술
     fig.patch.set_facecolor('#1a1a2e')
     draw_pitch_real_scale(ax)
     
-    # 제목 스타일
+    # 제목
     ax.set_title(title, fontsize=16, fontweight='bold', color='white', 
                  pad=15, fontfamily='Malgun Gothic')
     
-    # 시퀀스 정보 표시
-    info_text = f"시퀀스 ID: {sequence_id} | 이벤트 수: {len(events)}"
+    # 시퀀스 정보
+    info_text = f"시퀀스 ID: {sequence_id} | 이벤트 수: {len(events)} | 선수 수: {len(player_events)}"
     ax.text(FIELD_LENGTH/2, -3, info_text, ha='center', fontsize=10, 
             color='#cccccc', fontfamily='Malgun Gothic')
     
-    # 애니메이션 요소 초기화
-    # 경로 라인 (지나온 경로)
-    path_line, = ax.plot([], [], '-', color='yellow', linewidth=2, alpha=0.7, zorder=3)
+    # ===== 애니메이션 요소 초기화 =====
     
-    # 현재 이벤트 화살표 (동적으로 생성)
-    arrow_patch = None
+    # 공 궤적 라인
+    ball_path_line, = ax.plot([], [], '-', color='yellow', linewidth=1.5, alpha=0.5, zorder=3)
+    ball_path_x, ball_path_y = [], []
     
-    # 선수 및 공 (초기 위치)
-    if events:
-        init_x, init_y = events[0]['start_x'], events[0]['start_y']
-    else:
-        init_x, init_y = FIELD_LENGTH / 2, FIELD_WIDTH / 2
+    # 선수 마커 딕셔너리 (player_id -> {circle, glow, label})
+    player_markers = {}
     
-    # 선수 마커 (원)
-    player_circle = plt.Circle((init_x, init_y), 2.5, color='#3498db', 
-                                 edgecolor='white', linewidth=2, zorder=5)
-    ax.add_patch(player_circle)
-    
-    # 선수 활성 글로우
-    player_glow = plt.Circle((init_x, init_y), 4, color='yellow', alpha=0.3, zorder=4)
-    ax.add_patch(player_glow)
+    for i, (player_id, events_list) in enumerate(player_events.items()):
+        # 초기 위치 (첫 이벤트의 start 위치)
+        init_x = events_list[0]['start_x']
+        init_y = events_list[0]['start_y']
+        
+        # 팀 색상 (간단히 인덱스로 구분)
+        color = TEAM_COLORS[i % len(TEAM_COLORS)]
+        
+        # 선수 글로우 (활성화 표시)
+        glow = plt.Circle((init_x, init_y), PLAYER_GLOW_RADIUS, 
+                          color='yellow', alpha=0, zorder=4)
+        ax.add_patch(glow)
+        
+        # 선수 원
+        circle = plt.Circle((init_x, init_y), PLAYER_RADIUS, 
+                            facecolor=color, edgecolor='white', linewidth=1.5, zorder=5)
+        ax.add_patch(circle)
+        
+        # 선수 이름 레이블
+        player_name = events_list[0]['player_name']
+        label = ax.text(init_x, init_y - PLAYER_RADIUS - 0.8, player_name, 
+                       ha='center', fontsize=7, color='white', zorder=6,
+                       bbox=dict(boxstyle='round,pad=0.2', facecolor='#333', alpha=0.7, edgecolor='none'))
+        
+        player_markers[player_id] = {
+            'circle': circle,
+            'glow': glow,
+            'label': label,
+            'color': color
+        }
     
     # 공 마커
-    ball_circle = plt.Circle((init_x, init_y), 1.2, color='white', 
-                               edgecolor='black', linewidth=1.5, zorder=7)
+    ball_circle = plt.Circle((events[0]['start_x'], events[0]['start_y']), BALL_RADIUS, 
+                             facecolor='white', edgecolor='black', linewidth=2, zorder=7)
     ax.add_patch(ball_circle)
     
-    # 공 패턴
-    ball_pattern = RegularPolygon((init_x, init_y), numVertices=5, radius=0.6, 
-                                   color='black', zorder=8)
+    # 공 패턴 (오각형)
+    ball_pattern = RegularPolygon((events[0]['start_x'], events[0]['start_y']), 
+                                   numVertices=5, radius=BALL_RADIUS * 0.6, 
+                                   facecolor='black', edgecolor='none', zorder=8)
     ax.add_patch(ball_pattern)
     
-    # 이벤트 레이블
-    event_label = ax.text(init_x, init_y + 5, '', ha='center', fontsize=9, 
-                          color='white', fontweight='bold', zorder=10,
-                          bbox=dict(boxstyle='round,pad=0.3', facecolor='#333', alpha=0.8))
+    # 이벤트 레이블 (현재 이벤트 정보)
+    event_label = ax.text(FIELD_LENGTH/2, FIELD_WIDTH + 3, '', 
+                          ha='center', fontsize=11, color='white', fontweight='bold', zorder=10,
+                          bbox=dict(boxstyle='round,pad=0.5', facecolor='#333', alpha=0.9))
     
     # 시작점 마커
-    ax.scatter([init_x], [init_y], color='lime', s=200, zorder=3, 
-               edgecolor='white', linewidth=2, marker='o', label='시작점')
+    ax.scatter([events[0]['start_x']], [events[0]['start_y']], 
+               color='lime', s=200, zorder=3, edgecolor='white', linewidth=2, marker='o', label='시작점')
     
-    # 경로 데이터 저장
-    path_x = [init_x]
-    path_y = [init_y]
+    # 총 프레임 수
+    total_frames = len(events) * TRANSITION_FRAMES + 10
     
-    # 이벤트 인덱스별 프레임 계산
-    total_frames = len(events) * TRANSITION_FRAMES + 10  # 마지막 유지 프레임 추가
-    
-    # 플로팅된 이벤트 포인트 저장
+    # 플로팅된 이벤트 포인트
     event_markers = []
     
     def init():
         """애니메이션 초기화"""
-        path_line.set_data([], [])
-        return path_line, player_circle, player_glow, ball_circle, ball_pattern, event_label
+        ball_path_line.set_data([], [])
+        return [ball_path_line, ball_circle, ball_pattern, event_label] + \
+               [m['circle'] for m in player_markers.values()] + \
+               [m['glow'] for m in player_markers.values()] + \
+               [m['label'] for m in player_markers.values()]
     
     def animate(frame):
         """프레임별 애니메이션 업데이트"""
-        nonlocal path_x, path_y, arrow_patch
+        nonlocal ball_path_x, ball_path_y
         
-        # 현재 이벤트 인덱스 및 보간 진행률 계산
+        # 현재 이벤트 인덱스 및 진행률
         event_idx = min(frame // TRANSITION_FRAMES, len(events) - 1)
         progress = (frame % TRANSITION_FRAMES) / TRANSITION_FRAMES
         
         if event_idx >= len(events):
-            return path_line, player_circle, player_glow, ball_circle, ball_pattern, event_label
+            return [ball_path_line, ball_circle, ball_pattern, event_label] + \
+                   [m['circle'] for m in player_markers.values()] + \
+                   [m['glow'] for m in player_markers.values()] + \
+                   [m['label'] for m in player_markers.values()]
         
-        event = events[event_idx]
-        category = event['category']
+        current_event = events[event_idx]
         
-        # 시작점과 끝점
-        sx, sy = event['start_x'], event['start_y']
-        ex, ey = event['end_x'], event['end_y']
+        # 1. 모든 선수 위치 업데이트
+        for player_id, markers in player_markers.items():
+            x, y, is_active = get_player_position(player_id, player_events, event_idx, progress)
+            
+            # 선수 원 위치
+            markers['circle'].center = (x, y)
+            
+            # 활성 선수 글로우
+            if is_active:
+                markers['glow'].set_alpha(0.5)
+                markers['glow'].center = (x, y)
+                markers['circle'].set_linewidth(3)
+                markers['circle'].set_edgecolor('yellow')
+            else:
+                markers['glow'].set_alpha(0)
+                markers['circle'].set_linewidth(1.5)
+                markers['circle'].set_edgecolor('white')
+            
+            # 선수 이름 레이블 위치
+            markers['label'].set_position((x, y - PLAYER_RADIUS - 0.8))
         
-        # 현재 보간 위치
-        if category == 'carry':
-            # Carry: 선수와 공이 함께 이동
-            curr_x = sx + (ex - sx) * progress
-            curr_y = sy + (ey - sy) * progress
-            
-            # 선수 위치 업데이트
-            player_circle.center = (curr_x, curr_y)
-            player_glow.center = (curr_x, curr_y)
-            
-            # 공 위치 업데이트 (선수와 함께)
-            ball_circle.center = (curr_x + 1.5, curr_y)  # 약간 앞에
-            ball_pattern.xy = (curr_x + 1.5, curr_y)
-            
-        elif category == 'pass':
-            # Pass: 선수는 시작점에 고정, 공만 이동
-            player_circle.center = (sx, sy)
-            player_glow.center = (sx, sy)
-            
-            # 공만 이동
-            curr_x = sx + (ex - sx) * progress
-            curr_y = sy + (ey - sy) * progress
-            ball_circle.center = (curr_x, curr_y)
-            ball_pattern.xy = (curr_x, curr_y)
-            
-        else:
-            # 기타: 기본 이동
-            curr_x = sx + (ex - sx) * progress
-            curr_y = sy + (ey - sy) * progress
-            player_circle.center = (curr_x, curr_y)
-            player_glow.center = (curr_x, curr_y)
-            ball_circle.center = (curr_x, curr_y)
-            ball_pattern.xy = (curr_x, curr_y)
+        # 2. 공 위치 업데이트
+        ball_x, ball_y = get_ball_position(current_event, progress, player_events)
+        ball_circle.center = (ball_x, ball_y)
+        ball_pattern.xy = (ball_x, ball_y)
         
-        # 이벤트 레이블 업데이트
-        event_type = event['type_name']
-        player_name = event['player_name'][:6] if event['player_name'] else ''
-        label_text = f"{event_type}"
-        if player_name:
-            label_text = f"{player_name}\n{event_type}"
+        # 3. 공 궤적 업데이트
+        if len(ball_path_x) == 0 or (ball_x != ball_path_x[-1] or ball_y != ball_path_y[-1]):
+            ball_path_x.append(ball_x)
+            ball_path_y.append(ball_y)
+            ball_path_line.set_data(ball_path_x, ball_path_y)
+        
+        # 4. 이벤트 레이블 업데이트
+        event_type = current_event['type_name']
+        player_name = current_event['player_name']
+        label_text = f"이벤트 {event_idx + 1}/{len(events)}: {player_name} - {event_type}"
         event_label.set_text(label_text)
-        event_label.set_position((curr_x, curr_y + 6))
-        event_label.set_color(event['color'])
+        event_label.set_color(current_event['color'])
         
-        # 경로 업데이트 (이벤트 완료 시)
-        if progress >= 0.9 and len(path_x) <= event_idx + 1:
-            path_x.append(ex)
-            path_y.append(ey)
-            path_line.set_data(path_x, path_y)
-            
-            # 이벤트 포인트 마커 추가
-            marker = ax.scatter([ex], [ey], color=event['color'], s=80, 
-                               zorder=4, edgecolor='white', linewidth=1, alpha=0.8)
+        # 5. 이벤트 완료 시 마커 추가
+        if progress >= 0.9 and len(event_markers) <= event_idx:
+            marker = ax.scatter([current_event['end_x']], [current_event['end_y']], 
+                               color=current_event['color'], s=60, zorder=4, 
+                               edgecolor='white', linewidth=1, alpha=0.7)
             event_markers.append(marker)
         
-        # 선수 색상 업데이트 (이벤트 타입별)
-        player_circle.set_facecolor(event['color'])
-        
-        return path_line, player_circle, player_glow, ball_circle, ball_pattern, event_label
+        return [ball_path_line, ball_circle, ball_pattern, event_label] + \
+               [m['circle'] for m in player_markers.values()] + \
+               [m['glow'] for m in player_markers.values()] + \
+               [m['label'] for m in player_markers.values()]
     
     # 애니메이션 생성
     anim = FuncAnimation(fig, animate, init_func=init, frames=total_frames, 
@@ -526,21 +681,13 @@ def plot_sequence_static(seq_df, sequence_id, output_path, title="전술 패턴"
     """
     시퀀스를 정적 이미지로 플롯합니다.
     각 이벤트를 점으로 표시하고 화살표로 연결합니다.
-    
-    Args:
-        seq_df: 전체 시퀀스 데이터프레임
-        sequence_id: 플롯할 시퀀스 ID
-        output_path: 출력 파일 경로
-        title: 플롯 제목
     """
-    # 시퀀스 추출 및 정렬
     seq = seq_df[seq_df['sequence_id'] == sequence_id].sort_values('seq_position', ascending=False).reset_index(drop=True)
     
     if len(seq) == 0:
         print(f"    [경고] 시퀀스 {sequence_id}를 찾을 수 없습니다.")
         return None
     
-    # Figure 설정
     fig, ax = plt.subplots(figsize=(14, 9))
     fig.patch.set_facecolor('#1a1a2e')
     draw_pitch_real_scale(ax)
@@ -552,45 +699,37 @@ def plot_sequence_static(seq_df, sequence_id, output_path, title="전술 패턴"
     prev_x, prev_y = None, None
     
     for idx, row in seq.iterrows():
-        # 좌표 변환
         x = row['start_x'] * FIELD_LENGTH
         y = row['start_y'] * FIELD_WIDTH
         end_x = row['end_x'] * FIELD_LENGTH if pd.notna(row['end_x']) else x
         end_y = row['end_y'] * FIELD_WIDTH if pd.notna(row['end_y']) else y
         
-        # 이벤트 색상
         color = get_event_color(row['type_name'], row.get('spadl_type', ''))
         category = get_event_category(row['type_name'], row.get('spadl_type', ''))
         
-        # 이전 이벤트와 연결 (경로 라인)
+        # 이전 이벤트와 연결
         if prev_x is not None:
             ax.plot([prev_x, x], [prev_y, y], '-', color='yellow', 
                    linewidth=1.5, alpha=0.6, zorder=2)
         
-        # 이벤트 화살표 (시작 -> 끝)
+        # 이벤트 화살표
         if category == 'pass':
-            arrow_style = 'fancy,head_width=6,head_length=8'
             arrow = FancyArrowPatch(
                 (x, y), (end_x, end_y),
-                arrowstyle=arrow_style,
-                color=color,
-                linewidth=2,
-                alpha=0.8,
-                zorder=3,
-                connectionstyle='arc3,rad=0.1'
+                arrowstyle='fancy,head_width=6,head_length=8',
+                color=color, linewidth=2, alpha=0.8, zorder=3
             )
             ax.add_patch(arrow)
         
         # 이벤트 포인트
         if idx == 0:
-            # 시작점 (특별 표시)
             ax.scatter([x], [y], color='lime', s=250, zorder=5, 
                       edgecolor='white', linewidth=2, marker='o')
         else:
             ax.scatter([x], [y], color=color, s=120, zorder=4, 
                       edgecolor='white', linewidth=1.5)
         
-        # 이벤트 레이블
+        # 레이블
         label = f"{idx+1}. {row['type_name']}"
         ax.annotate(label, (x, y), xytext=(5, 5), textcoords='offset points',
                    fontsize=7, color='white', fontweight='bold',
@@ -598,7 +737,7 @@ def plot_sequence_static(seq_df, sequence_id, output_path, title="전술 패턴"
         
         prev_x, prev_y = end_x, end_y
     
-    # 마지막 끝점 표시
+    # 마지막 점
     if len(seq) > 0:
         last_row = seq.iloc[-1]
         end_x = last_row['end_x'] * FIELD_LENGTH if pd.notna(last_row['end_x']) else last_row['start_x'] * FIELD_LENGTH
@@ -606,18 +745,6 @@ def plot_sequence_static(seq_df, sequence_id, output_path, title="전술 패턴"
         ax.scatter([end_x], [end_y], color='red', s=200, zorder=5, 
                   edgecolor='white', linewidth=2, marker='*')
     
-    # 범례
-    legend_elements = [
-        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='lime', 
-                   markersize=12, label='시작점', linestyle='None'),
-        plt.Line2D([0], [0], marker='*', color='w', markerfacecolor='red', 
-                   markersize=15, label='종료점', linestyle='None'),
-        plt.Line2D([0], [0], color='yellow', linewidth=2, label='이동 경로'),
-    ]
-    ax.legend(handles=legend_elements, loc='upper left', fontsize=9, 
-              facecolor='#333', edgecolor='white', labelcolor='white')
-    
-    # 저장
     plt.savefig(output_path, dpi=150, bbox_inches='tight', 
                 facecolor=fig.get_facecolor(), edgecolor='none')
     plt.close(fig)
@@ -629,19 +756,9 @@ def plot_sequence_static(seq_df, sequence_id, output_path, title="전술 패턴"
 # 클러스터별 대표 시퀀스 애니메이션
 # =========================================================
 def create_cluster_animations(seq_df, cluster_df, cluster_col, n_clusters=10, n_samples=3):
-    """
-    각 클러스터의 대표 시퀀스들을 애니메이션으로 생성합니다.
-    
-    Args:
-        seq_df: 시퀀스 데이터프레임
-        cluster_df: 클러스터 레이블 데이터프레임
-        cluster_col: 클러스터 컬럼명
-        n_clusters: 생성할 클러스터 수
-        n_samples: 클러스터당 샘플 수
-    """
+    """각 클러스터의 대표 시퀀스들을 애니메이션으로 생성합니다."""
     print(f"[애니메이션] {cluster_col} 클러스터별 애니메이션 생성 중...")
     
-    # 클러스터 크기 순으로 정렬
     cluster_sizes = cluster_df[cluster_col].value_counts()
     top_clusters = [c for c in cluster_sizes.index if c != -1][:n_clusters]
     
@@ -649,7 +766,6 @@ def create_cluster_animations(seq_df, cluster_df, cluster_col, n_clusters=10, n_
         seq_ids = cluster_df[cluster_df[cluster_col] == cluster_id]['sequence_id'].values[:n_samples]
         
         for i, seq_id in enumerate(seq_ids):
-            # 애니메이션 생성
             output_path = f"{OUTPUT_DIR}{cluster_col}_cluster{cluster_id}_sample{i+1}.mp4"
             title = f"클러스터 {cluster_id} - 샘플 {i+1}"
             
@@ -657,7 +773,6 @@ def create_cluster_animations(seq_df, cluster_df, cluster_col, n_clusters=10, n_
             if result:
                 print(f"    -> 저장: {result}")
             
-            # 정적 플롯도 생성
             static_path = f"{OUTPUT_DIR}{cluster_col}_cluster{cluster_id}_sample{i+1}_static.png"
             result_static = plot_sequence_static(seq_df, seq_id, static_path, title)
             if result_static:
@@ -671,21 +786,20 @@ def create_cluster_animations(seq_df, cluster_df, cluster_col, n_clusters=10, n_
 # =========================================================
 def main():
     print("=" * 60)
-    print("deTACTer 전술 애니메이션 생성 (이벤트 기반)")
+    print("deTACTer 전술 애니메이션 생성 (v2.0 - 선수 추적)")
     print("=" * 60)
     
     # 데이터 로드
     print("[1/4] 데이터 로드 중...")
     seq_df = pd.read_csv(DATA_DIR + 'attack_sequences.csv', encoding='utf-8-sig')
     
-    # 세부 분류를 위한 OPTICS 재실행
+    # 클러스터 분석
     print("[2/4] OPTICS 세부 분류 (min_samples=3, xi=0.03)...")
     dtw_matrix = np.load(DATA_DIR + 'dtw_distance_matrix.npy')
     
     optics = OPTICS(min_samples=3, xi=0.03, metric='precomputed')
     labels = optics.fit_predict(dtw_matrix)
     
-    # 기존 클러스터 레이블 로드 및 업데이트
     cluster_df = pd.read_csv(DATA_DIR + 'cluster_labels.csv', encoding='utf-8-sig')
     cluster_df['optics_detailed'] = labels
     cluster_df.to_csv(DATA_DIR + 'cluster_labels.csv', index=False, encoding='utf-8-sig')
@@ -694,17 +808,16 @@ def main():
     n_noise = list(labels).count(-1)
     print(f"    -> {n_clusters}개 클러스터, {n_noise}개 노이즈")
     
-    # 상위 5개 클러스터 애니메이션 생성
+    # 클러스터별 애니메이션
     print("[3/4] 클러스터별 애니메이션 생성 중...")
     create_cluster_animations(seq_df, cluster_df, 'optics_detailed', n_clusters=5, n_samples=2)
     
-    # 단일 샘플 애니메이션 (데모용)
+    # 데모 애니메이션
     print("[4/4] 데모 애니메이션 생성...")
     sample_seq = cluster_df[cluster_df['optics_detailed'] != -1]['sequence_id'].iloc[0]
     demo_path = create_event_based_animation(seq_df, sample_seq, OUTPUT_DIR + 'demo_sequence.mp4', "전술 패턴 데모")
     print(f"    -> 데모 저장: {demo_path}")
     
-    # 데모 정적 플롯
     static_demo_path = plot_sequence_static(seq_df, sample_seq, OUTPUT_DIR + 'demo_sequence_static.png', "전술 패턴 데모 (정적)")
     print(f"    -> 데모 정적 플롯 저장: {static_demo_path}")
     
