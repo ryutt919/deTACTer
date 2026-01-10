@@ -98,12 +98,12 @@ def identify_outcome_events(df):
     # 2. 성과 조건 정의
     is_shot = df['spadl_type'].str.contains('shot', case=False, na=False)
     
-    # 박스 진입 (상상 타겟 진영 박스여야 함)
-    # L->R 공격: end_x > 0.84, 0.2 < end_y < 0.8
-    # R->L 공격: end_x < 0.16, 0.2 < end_y < 0.8
+    # 박스 진입 (선수가 상대 진영 박스 안에서 액션을 시작했는지 판별)
+    # L->R 공격: start_x > 0.84, 0.2 < start_y < 0.8
+    # R->L 공격: start_x < 0.16, 0.2 < start_y < 0.8
     is_in_box = (
-        (df['is_l_to_r'] & (df['end_x'] > PENALTY_BOX_X) & (df['end_y'] > PENALTY_BOX_Y_MIN) & (df['end_y'] < PENALTY_BOX_Y_MAX)) |
-        (~df['is_l_to_r'] & (df['end_x'] < (1.0 - PENALTY_BOX_X)) & (df['end_y'] > PENALTY_BOX_Y_MIN) & (df['end_y'] < PENALTY_BOX_Y_MAX))
+        (df['is_l_to_r'] & (df['start_x'] > PENALTY_BOX_X) & (df['start_y'] > PENALTY_BOX_Y_MIN) & (df['start_y'] < PENALTY_BOX_Y_MAX)) |
+        (~df['is_l_to_r'] & (df['start_x'] < (1.0 - PENALTY_BOX_X)) & (df['start_y'] > PENALTY_BOX_Y_MIN) & (df['start_y'] < PENALTY_BOX_Y_MAX))
     )
     
     # 수비적 액션 제외 (인터셉트, 클리어링, 태클, 키퍼 세이브 등)
